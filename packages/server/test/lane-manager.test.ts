@@ -38,6 +38,26 @@ describe("LaneManager", () => {
     expect(git(lane.worktreePath, "rev-parse", "--abbrev-ref", "HEAD")).toBe("pg/demo/ab12/main");
   });
 
+  it("forks a lane from a node's end snapshot after its lane moved on (§8.7)", async () => {
+    const { lanes, run, git } = setup();
+    const main = await lanes.createLane(run, planned("main", 0), "main");
+    fs.writeFileSync(path.join(main.worktreePath, "README.md"), "changed by A\n");
+    fs.writeFileSync(path.join(main.worktreePath, "a.txt"), "from A\n");
+    const snap = await lanes.snapshot(main, "nr-a", "end", "A");
+    // The next node of the lane changes the worktree further.
+    fs.writeFileSync(path.join(main.worktreePath, "b.txt"), "from B\n");
+    fs.rmSync(path.join(main.worktreePath, "a.txt"));
+    await lanes.checkpoint(main, "B");
+
+    const fork = await lanes.createLaneFromSnapshot(run, { ...planned("l2", 1), parentLaneId: "main", forkAfterNodeId: "a" }, snap, "A");
+    expect(fs.readFileSync(path.join(fork.worktreePath, "a.txt"), "utf8")).toBe("from A\n");
+    expect(fs.readFileSync(path.join(fork.worktreePath, "README.md"), "utf8")).toBe("changed by A\n");
+    expect(fs.existsSync(path.join(fork.worktreePath, "b.txt"))).toBe(false);
+    expect(git(fork.worktreePath, "status", "--porcelain")).toBe("");
+    expect(git(fork.worktreePath, "log", "-1", "--format=%s")).toBe("pg: checkpoint after A");
+    expect(fork.baseRef).toBe(git(main.worktreePath, "rev-parse", `${snap}^`));
+  });
+
   it("checkpoints only dirty lanes", async () => {
     const { lanes, run, git } = setup();
     const lane = await lanes.createLane(run, planned("main", 0), "main");

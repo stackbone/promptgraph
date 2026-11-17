@@ -3,12 +3,14 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import {
   BillingModeSchema,
+  LanePlanJsonSchema,
   emptyUsage,
   sumUsage,
   type BillingMode,
   type Graph,
   type GraphRunStats,
   type Lane,
+  type LanePlanJson,
   type LaneStatus,
   type LoopState,
   type NodeRun,
@@ -217,6 +219,8 @@ interface RunRow {
   cleaned_up: number;
   loops: string | null;
   billing_mode: string | null;
+  graph_rev: number;
+  lane_plan: string | null;
   started_at: number;
   finished_at: number | null;
 }
@@ -467,6 +471,26 @@ export class Store {
   }
 
   /** Persisted loop counters of a run ([] for graphs without loops). */
+  /**
+   * §8.7: a live edit replaces the run's snapshot, bumps its revision and stores the lane plan it produced. Returns
+   * the new revision.
+   */
+  updateRunGraph(id: string, graph: Graph, lanePlan: LanePlanJson): number {
+    this.db
+      .prepare(`UPDATE runs SET graph_snapshot = ?, lane_plan = ?, graph_rev = graph_rev + 1 WHERE id = ?`)
+      .run(JSON.stringify(graph), JSON.stringify(lanePlan), id);
+    const row = this.db.prepare(`SELECT graph_rev FROM runs WHERE id = ?`).get(id) as Pick<RunRow, "graph_rev"> | undefined;
+    if (!row) throw new Error(`Run ${id} not found`);
+    return row.graph_rev;
+  }
+
+  /** §8.7: the lane plan stored by the last live edit, or null when the run was never edited. */
+  getLanePlan(runId: string): LanePlanJson | null {
+    const row = this.db.prepare(`SELECT lane_plan FROM runs WHERE id = ?`).get(runId) as Pick<RunRow, "lane_plan"> | undefined;
+    const parsed = LanePlanJsonSchema.safeParse(parseJson<unknown>(row?.lane_plan ?? null));
+    return parsed.success ? parsed.data : null;
+  }
+
   getLoopStates(runId: string): LoopState[] {
     const row = this.db.prepare(`SELECT loops FROM runs WHERE id = ?`).get(runId) as Pick<RunRow, "loops"> | undefined;
     return parseJson<LoopState[]>(row?.loops ?? null) ?? [];
@@ -507,6 +531,7 @@ export class Store {
       usage: usages.length > 0 ? sumUsage(usages) : emptyUsage(),
       billingMode: billingModeOrNull(r.billing_mode),
       cleanedUp: r.cleaned_up === 1,
+      graphRev: r.graph_rev,
     };
   }
 
@@ -569,6 +594,11 @@ export class Store {
     const nr = this.getNodeRun(id);
     if (!nr) throw new Error(`Node run ${id} not found`);
     return nr;
+  }
+
+  /** §8.7: removes a node run that never started (its node was removed by a live edit). */
+  deleteNodeRun(id: string): void {
+    this.db.prepare(`DELETE FROM node_runs WHERE id = ?`).run(id);
   }
 
   getNodeRun(id: string): NodeRun | undefined {

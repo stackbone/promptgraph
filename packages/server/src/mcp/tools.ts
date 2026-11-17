@@ -1,6 +1,9 @@
 import {
   API,
   GRAPH_CONFLICT_CODE,
+  RUN_BUSY_CODE,
+  RUN_EDIT_REFUSED_CODE,
+  RunEditProblemSchema,
   GraphPatchError,
   GraphPatchSchema,
   applyGraphPatch,
@@ -69,6 +72,16 @@ const json = (value: unknown): CallToolResult => ({ content: [{ type: "text", te
 const fail = (message: string): CallToolResult => ({ isError: true, content: [{ type: "text", text: message }] });
 
 function describeError(err: unknown): string {
+  if (err instanceof ApiRequestError && err.code === RUN_EDIT_REFUSED_CODE) {
+    // §8.7: a live edit of an active run touched steps that already started.
+    const problems = RunEditProblemSchema.array().safeParse(err.details);
+    const list = problems.success ? problems.data.map((p) => `- ${p.message}`).join("\n") : err.message;
+    return (
+      `The graph has an active run, and this edit changes steps that already started. Nothing was saved.\n${list}\n` +
+      "Only steps that have not started can change (get_graph lists the started ones in runLocks: \"config\" ones may still get a new config for a retry). " +
+      "Change only those, or connect new steps after a finished or running one, and retry."
+    );
+  }
   if (err instanceof ApiRequestError) {
     const details = err.details === undefined ? "" : `\ndetails: ${truncate(JSON.stringify(err.details, null, 2), 4000)}`;
     return `promptgraph API error ${err.status}${err.code ? ` (${err.code})` : ""}: ${err.message}${details}`;
@@ -77,6 +90,21 @@ function describeError(err: unknown): string {
   if (err instanceof GraphPatchError) return `patch_graph (${err.code}): ${err.message}\nNothing was saved. Fix the ops (get_graph shows the current ids) and retry.`;
   return errorMessage(err);
 }
+
+/** PUT of a graph; §8.7: a save that met the active run mid-transition (run_busy) is retried once after a second. */
+async function putGraph<T>(client: Connection["client"], url: string, graph: unknown): Promise<T> {
+  try {
+    return await client.put<T>(url, graph);
+  } catch (err) {
+    if (!(err instanceof ApiRequestError) || err.code !== RUN_BUSY_CODE) throw err;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return client.put<T>(url, graph);
+  }
+}
+
+/** Note added to a save result when the graph has an active run (§8.7). */
+const LIVE_EDIT_NOTE =
+  "The graph has an active run: this change applies to it live. Steps added after a finished step start right away; the others run when the run reaches them.";
 
 /** Wraps a handler: errors become `isError` results Claude can read and act on. */
 function guarded<A>(fn: (args: A) => Promise<CallToolResult>): (args: A) => Promise<CallToolResult> {
@@ -222,7 +250,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     "get_graph",
     {
       title: "Get graph",
-      description: "The full graph JSON, plus whether a run is active on it (then it is read-only).",
+      description:
+        "The full graph JSON, plus whether a run is active on it (activeRunId). While a run is active, edits apply to it live and only the steps " +
+        "that have not started can change: runLocks lists the started ones (\"frozen\": only label and position; \"config\": config may change for a retry).",
       inputSchema: { ...repoArg, graphId: graphIdArg },
       annotations: READ,
     },
@@ -238,7 +268,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       title: "Create or update a graph",
       description:
         "Saves a whole graph (create or replace) and returns its validation. Node positions and edge ids may be omitted (auto layout). " +
-        "Read graph_reference first. Refused while a run of the graph is active. The UI updates live.",
+        "Read graph_reference first. While a run of the graph is active the save applies to the run live and may only change steps that have not started " +
+        "(prefer patch_graph then). The UI updates live.",
       inputSchema: {
         ...repoArg,
         graph: z.looseObject({}).describe("Graph JSON: { id, name, settings?, nodes: [{ id, type, label, config, position? }], edges: [{ source, target, sourcePort?, when?, loop? }] }"),
@@ -261,10 +292,12 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           );
         }
       }
-      const saved = await client.put<SaveGraphResponse>(c.api.graph(normalized.id), normalized);
+      const saved = await putGraph<SaveGraphResponse>(client, c.api.graph(normalized.id), normalized);
       const validation = await client.post<ValidateGraphResponse>(c.api.validate(saved.graph.id), { graph: saved.graph });
+      const live = await client.get<GetGraphResponse>(c.api.graph(saved.graph.id)).catch(() => null);
       return json({
         saved: true,
+        ...(live?.activeRunId ? { activeRunId: live.activeRunId, note: LIVE_EDIT_NOTE } : {}),
         graphId: saved.graph.id,
         file: `.promptgraph/graphs/${saved.graph.id}.json`,
         nodes: saved.graph.nodes.length,
@@ -284,7 +317,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         "(bridges predecessors to the success successors by default; failure / always handlers go with the node), connect, disconnect, " +
         "insert_after (takes over the success edges of the anchor), insert_before. Unknown config fields are rejected. Ops apply in order and " +
         "all-or-nothing; existing nodes keep their ids and positions, new nodes get an id and a position when omitted. Prefer this over " +
-        "save_graph for any change to an existing graph. Refused while a run of the graph is active. The UI updates live and can undo it.",
+        "save_graph for any change to an existing graph. While a run of the graph is active the edit applies to the run live: only steps that have not " +
+        "started can change (get_graph → runLocks), and a step inserted after a finished one starts right away. The UI updates live and can undo it.",
       inputSchema: {
         ...repoArg,
         graphId: graphIdArg,
@@ -297,13 +331,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       const c = await conn(repo);
       const client = c.client;
       const current = await client.get<GetGraphResponse>(c.api.graph(graphId));
-      if (current.activeRunId) {
-        return fail(`Graph "${graphId}" is read-only while run ${current.activeRunId} is active. Wait for it to finish (or ask the user to cancel it) and retry.`);
-      }
       const patched = applyGraphPatch(current.graph, ops);
       let saved: SaveGraphResponse;
       try {
-        saved = await client.put<SaveGraphResponse>(c.api.saveGraph(graphId, current.hash), patched.graph);
+        saved = await putGraph<SaveGraphResponse>(client, c.api.saveGraph(graphId, current.hash), patched.graph);
       } catch (err) {
         if (err instanceof ApiRequestError && err.code === GRAPH_CONFLICT_CODE) {
           return fail(`The graph "${graphId}" changed while it was being patched (the user may be editing it). Nothing was saved. Call get_graph again, rebuild the ops against the current graph and retry.`);
@@ -319,6 +350,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       return json({
         saved: true,
         graphId,
+        ...(current.activeRunId ? { activeRunId: current.activeRunId, note: LIVE_EDIT_NOTE } : {}),
         added: nodeLabels(patched.added),
         removed: patched.removed,
         updated: nodeLabels(patched.updated),

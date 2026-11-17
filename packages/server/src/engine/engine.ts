@@ -2,7 +2,14 @@ import fs from "node:fs";
 import {
   ATTENTION_NODE_STATUSES,
   buildTopology,
+  checkRunEdit,
   computeLanePlan,
+  diffRunGraph,
+  isEmptyRunEditDiff,
+  lanePlanFromJson,
+  lanePlanToJson,
+  planRunLanes,
+  runEditLocks,
   edgeMatches,
   isFinalNodeStatus,
   isFinalRunStatus,
@@ -30,6 +37,9 @@ import {
   type ReopenResponse,
   type Run,
   type RunDetail,
+  type RunEditDiff,
+  type RunEditProblem,
+  type RunLocks,
   type RunReportResponse,
   type RunStatus,
   type Topology,
@@ -87,7 +97,9 @@ export class EngineError extends Error {
       | "validation_failed"
       | "run_active"
       | "invalid_state"
-      | "load_error",
+      | "load_error"
+      | "run_edit_refused"
+      | "run_busy",
     message: string,
     readonly details?: unknown,
   ) {
@@ -114,6 +126,20 @@ interface LoopIterationEvent {
   body: string[];
 }
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
+/** §8.7: how long a graph save waits for the active run's in-flight transitions before answering run_busy. */
+const EDIT_WAIT_MS = 10_000;
+const EDIT_POLL_MS = 25;
+/** Event written for each live edit that changes more than positions (payload RunEditedEvent). */
+const RUN_EDITED_EVENT = "run.edited";
+
+interface RunEditedEvent {
+  rev: number;
+  added: string[];
+  removed: string[];
+  updated: string[];
+  addedEdges: string[];
+  removedEdges: string[];
+}
 /** §9.7: how long per-node snapshots (and so per-node diffs) are kept after a run finishes. */
 const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -195,10 +221,12 @@ export class Engine {
 
   constructor(private readonly deps: EngineDeps) {
     this.now = deps.now ?? Date.now;
-    deps.graphs.setWriteGuard((graphId) => {
-      if (this.activeRunForGraph(graphId)) {
-        throw new EngineError("run_active", `Graph "${graphId}" has an active run; it is read-only until the run ends`);
-      }
+    // §8.7: a save of a graph with an active run is a live edit of the run, applied before the file is written.
+    deps.graphs.setWriteGuard((graphId, next) => {
+      const runId = this.activeRunForGraph(graphId);
+      if (!runId) return;
+      if (!next) throw new EngineError("run_active", `Graph "${graphId}" has an active run; cancel it before deleting the graph`);
+      this.editRun(runId, next);
     });
   }
 
@@ -346,7 +374,134 @@ export class Engine {
     throw new EngineError("invalid_state", "Could not find an unused run id for branch names: clean up old runs and branches");
   }
 
-  /** Active (running or paused) run of a graph, if any. Graphs are read-only while one exists. */
+  /** §8.7: lock level of each node of the run that already started (GetGraphResponse.runLocks). */
+  getRunLocks(runId: string): RunLocks {
+    this.requireRun(runId);
+    return runEditLocks(this.deps.store.listNodeRuns(runId));
+  }
+
+  /**
+   * §8.7: resolves once the active run of `graphId` (if any) has no transition in flight (a node finishing, a fork
+   * being created), so a save that follows applies to a settled run. Gives up after EDIT_WAIT_MS; the save then
+   * answers run_busy.
+   */
+  async whenEditable(graphId: string): Promise<void> {
+    const deadline = this.now() + EDIT_WAIT_MS;
+    for (;;) {
+      const runId = this.activeRunForGraph(graphId);
+      const live = runId ? this.live.get(runId) : undefined;
+      if (!live || live.inflight === 0 || this.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, EDIT_POLL_MS));
+    }
+  }
+
+  /**
+   * §8.7 live edit: applies `next` (the graph about to be saved) to the active run, or throws (run_edit_refused
+   * with RunEditProblem[] details, validation_failed, run_busy) and nothing changes. Synchronous, so no engine
+   * transition runs in between; installed as the GraphStore write guard.
+   */
+  editRun(runId: string, next: Graph): void {
+    const { store } = this.deps;
+    const run = this.requireActiveRun(runId);
+    const live = this.ensureLive(run);
+    if (live.terminating || this.shuttingDown) throw new EngineError("run_active", `Run ${runId} is stopping; its graph cannot change`);
+    if (live.inflight > 0) throw new EngineError("run_busy", "The run is updating a step right now; save again in a moment");
+    const before = live.graph;
+    const nodeRuns = store.listNodeRuns(runId);
+    const problems: RunEditProblem[] = checkRunEdit(before, next, nodeRuns);
+    if (problems.length === 0) {
+      const validation = validateGraph(next, { phase: this.deps.phase, supportedNodeTypes: this.supportedNodeTypes() });
+      if (validation.errors.length > 0) {
+        throw new EngineError("validation_failed", `The run keeps its graph until it is valid: ${validation.errors[0]!.message}`, validation);
+      }
+    }
+    const planned = problems.length === 0 ? planRunLanes({ graph: next, previous: live.plan, nodeRuns, createdLaneIds: store.listLanes(runId).map((l) => l.id) }) : null;
+    if (planned) problems.push(...planned.problems);
+    if (problems.length > 0 || !planned) {
+      const more = problems.length > 1 ? ` (and ${problems.length - 1} more)` : "";
+      throw new EngineError("run_edit_refused", `${problems[0]!.message}${more}`, problems);
+    }
+    this.applyRunEdit(live, next, planned.plan, diffRunGraph(before, next), nodeRuns);
+  }
+
+  /** editRun, once allowed: persists the revision, reconciles node runs and lanes, rebuilds the tracker, schedules. */
+  private applyRunEdit(live: LiveRun, next: Graph, plan: LanePlan, diff: RunEditDiff, nodeRuns: readonly NodeRun[]): void {
+    const { store, bus } = this.deps;
+    const runId = live.runId;
+    const removed = new Set(diff.removedNodes);
+    const changed = new Set(diff.updatedNodes);
+    const created: NodeRun[] = [];
+    store.transaction(() => {
+      // Removed nodes never started (checkRunEdit): their node runs go.
+      for (const nr of nodeRuns) {
+        if (!removed.has(nr.nodeId)) continue;
+        live.scheduler.remove(nr.id);
+        store.deleteNodeRun(nr.id);
+      }
+      for (const nodeId of diff.addedNodes) {
+        created.push(store.insertNodeRun({ id: newId(), runId, nodeId, iteration: 0, attempt: 0, laneId: plan.laneOf.get(nodeId) ?? null, status: "pending" }));
+      }
+      for (const [nodeId, nr] of currentByNode(nodeRuns)) {
+        if (removed.has(nodeId) || (nr.status !== "pending" && nr.status !== "ready")) continue;
+        const laneId = plan.laneOf.get(nodeId) ?? null;
+        const moved = laneId !== nr.laneId;
+        if (nr.status === "ready" && (moved || changed.has(nodeId))) {
+          // Queued with its old definition or lane: back to pending, re-queued below if still ready.
+          live.scheduler.remove(nr.id);
+          this.patchNodeRun(nr.id, { status: "pending", ...(moved ? { laneId } : {}) });
+        } else if (moved) {
+          this.patchNodeRun(nr.id, { laneId });
+        }
+      }
+      const rev = store.updateRunGraph(runId, next, lanePlanToJson(plan));
+      if (!isEmptyRunEditDiff(diff)) {
+        const payload: RunEditedEvent = {
+          rev,
+          added: diff.addedNodes,
+          removed: diff.removedNodes,
+          updated: diff.updatedNodes,
+          addedEdges: diff.addedEdges.map((e) => e.id),
+          removedEdges: diff.removedEdges.map((e) => e.id),
+        };
+        store.appendEvent(runId, null, RUN_EDITED_EVENT, payload);
+      }
+    });
+    for (const nr of created) bus.emit("node:update", { nodeRun: nr });
+
+    const topo = buildTopology(next);
+    const tracker = this.restoreTracker(runId, next, topo);
+    Object.assign(live, {
+      graph: next,
+      nodes: new Map(next.nodes.map((n) => [n.id, n] as const)),
+      topo,
+      plan,
+      tracker,
+      loopNodes: new Set(topo.loopEdges.flatMap((e) => [...loopBody(topo, e)])),
+      loopsJson: "",
+    } satisfies Partial<LiveRun>);
+    const current = this.currentNodeRuns(runId);
+    const ready = new Set(tracker.readyUnresolved());
+    for (const nr of current.values()) {
+      // A new input from a step that has not run yet: no longer ready.
+      if (nr.status === "ready" && !ready.has(nr.nodeId)) {
+        live.scheduler.remove(nr.id);
+        this.patchNodeRun(nr.id, { status: "pending" });
+      }
+    }
+    for (const id of tracker.takeRestoredSkips()) {
+      const nr = current.get(id);
+      if (nr?.status === "pending") this.patchNodeRun(nr.id, { status: "skipped", finishedAt: this.now() });
+    }
+    for (const it of tracker.takeRestoredLoops()) void this.startIteration(live, it);
+    this.persistLoops(live);
+    // A paused run starts the new ready steps when it resumes (or its blocking step is retried).
+    if (this.requireRun(runId).status === "running") this.resumeReady(live);
+    this.emitRun(runId);
+    this.emitRepoChanged();
+    void this.checkProgress(live);
+  }
+
+  /** Active (running or paused) run of a graph, if any. Saves of its graph are live edits of the run (§8.7). */
   activeRunForGraph(graphId: string): string | null {
     const { store, repo } = this.deps;
     const run = store.listRunsByStatus(["running", "paused"], { repoPath: repo.path }).find((r) => r.graphId === graphId);
@@ -659,21 +814,10 @@ export class Engine {
     if (existing) return existing;
     const { store } = this.deps;
     const graph = run.graphSnapshot;
-    const topo = buildTopology(graph);
-    const userSkipped = new Set(store.listEvents(run.id).filter((e) => e.type === USER_SKIP_EVENT).map((e) => e.nodeRunId));
-    const loopStates = store.getLoopStates(run.id);
-    // Counters as persisted: whether a failure was handled by looping back (a crash right after it).
-    const probe = new ActivationTracker(graph, loopStates);
-    const finished: Array<{ nodeId: string; outcome: NodeOutcome | "skipped" }> = [];
-    for (const nr of currentByNode(store.listNodeRuns(run.id)).values()) {
-      if (nr.status === "succeeded") finished.push({ nodeId: nr.nodeId, outcome: { kind: "success", port: nr.output?.port } });
-      else if (nr.status === "skipped") finished.push({ nodeId: nr.nodeId, outcome: userSkipped.has(nr.id) ? { kind: "success" } : "skipped" });
-      else if (nr.status === "failed" && (this.hasFailureRoute(topo, nr.nodeId) || probe.loopHandlesFailure(nr.nodeId))) {
-        finished.push({ nodeId: nr.nodeId, outcome: { kind: "failure" } });
-      }
-    }
-    const tracker = ActivationTracker.restore(graph, finished, loopStates);
-    const live = this.createLive(run, computeLanePlan(graph), tracker);
+    const tracker = this.restoreTracker(run.id, graph, buildTopology(graph));
+    // A run edited live (§8.7) keeps the plan of its last edit; recomputing could rename its lanes.
+    const saved = store.getLanePlan(run.id);
+    const live = this.createLive(run, saved ? lanePlanFromJson(saved) : computeLanePlan(graph), tracker);
     // A node finished just before the crash: its dead-path skips were never persisted.
     const current = this.currentNodeRuns(run.id);
     for (const id of tracker.takeRestoredSkips()) {
@@ -689,6 +833,28 @@ export class Engine {
       for (const lane of store.listLanes(run.id)) if (!setUp.has(lane.id)) live.needsSetup.add(lane.id);
     }
     return live;
+  }
+
+  /**
+   * The activation state of a run rebuilt from its current node runs on `graph` (crash recovery, live edits):
+   * finished node runs are replayed in topological order with the persisted loop counters.
+   */
+  private restoreTracker(runId: string, graph: Graph, topo: Topology): ActivationTracker {
+    const { store } = this.deps;
+    const userSkipped = new Set(store.listEvents(runId).filter((e) => e.type === USER_SKIP_EVENT).map((e) => e.nodeRunId));
+    const loopStates = store.getLoopStates(runId);
+    // Counters as persisted: whether a failure was handled by looping back (a crash right after it).
+    const probe = new ActivationTracker(graph, loopStates);
+    const finished: Array<{ nodeId: string; outcome: NodeOutcome | "skipped" }> = [];
+    for (const nr of currentByNode(store.listNodeRuns(runId)).values()) {
+      if (!topo.nodes.has(nr.nodeId)) continue;
+      if (nr.status === "succeeded") finished.push({ nodeId: nr.nodeId, outcome: { kind: "success", port: nr.output?.port } });
+      else if (nr.status === "skipped") finished.push({ nodeId: nr.nodeId, outcome: userSkipped.has(nr.id) ? { kind: "success" } : "skipped" });
+      else if (nr.status === "failed" && (this.hasFailureRoute(topo, nr.nodeId) || probe.loopHandlesFailure(nr.nodeId))) {
+        finished.push({ nodeId: nr.nodeId, outcome: { kind: "failure" } });
+      }
+    }
+    return ActivationTracker.restore(graph, finished, loopStates);
   }
 
   /** Re-enqueues pending nodes whose inputs are resolved (after restore, or when a paused run resumes). */
@@ -1061,6 +1227,11 @@ export class Engine {
     if (!planned.parentLaneId) return this.createLane(live, run, planned, live.graph.settings.baseBranch);
     const parentId = planned.parentLaneId;
     const forkAfter = planned.forkAfterNodeId ? live.nodes.get(planned.forkAfterNodeId) : undefined;
+    if (planned.fromSnapshot) {
+      // §8.7: added after its fork point finished; the parent lane may have moved on since.
+      const label = forkAfter ? labelOf(forkAfter) : parentId;
+      return this.trackLane(live, laneId, this.deps.lanes.createLaneFromSnapshot(run, planned, planned.fromSnapshot, label));
+    }
     return this.trackLane(
       live,
       laneId,

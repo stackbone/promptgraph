@@ -149,4 +149,9 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX run_brief_run ON run_brief (run_id, id);
   `,
+  // §8.7 live edits: revisions applied to graph_snapshot, and the lane plan they produced (NULL = computed from the snapshot).
+  `
+  ALTER TABLE runs ADD COLUMN graph_rev INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE runs ADD COLUMN lane_plan TEXT;
+  `,
 ];

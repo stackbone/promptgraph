@@ -54,22 +54,27 @@ export function registerGraphRoutes(app: App, daemon: DaemonContext): void {
     const { graphs, engine, repo } = repoOf(c);
     const id = c.req.param("id");
     const { graph, hash } = graphs.get(id);
+    const activeRunId = engine.activeRunForGraph(id);
     return c.json<GetGraphResponse>({
       graph,
       hash,
       modifiedOutside: store.getKnownGraphHash(repo.path, id) !== hash,
-      activeRunId: engine.activeRunForGraph(id),
+      activeRunId,
+      ...(activeRunId ? { runLocks: engine.getRunLocks(activeRunId) } : {}),
     });
   });
 
-  // 409 while a run is active comes from the engine's GraphStore write guard. With ?baseHash= the save
-  // is also refused (409 graph_conflict) when the file changed since the caller read it (§21.7).
+  // With an active run the engine's GraphStore write guard applies the save to the run first (§8.7 live edit:
+  // 409 run_edit_refused / run_busy, 422 validation_failed). With ?baseHash= the save is also refused
+  // (409 graph_conflict) when the file changed since the caller read it (§21.7).
   app.put(`${P}/graphs/:id`, async (c) => {
-    const { graphs, repo } = repoOf(c);
+    const { graphs, repo, engine } = repoOf(c);
     const id = c.req.param("id");
     const { baseHash } = SaveGraphQuerySchema.parse({ baseHash: c.req.query("baseHash") || undefined });
     const body = await readBody(c, SaveGraphRequestSchema);
     if (body.id !== id) throw new HttpError(400, "id_mismatch", `Graph id "${body.id}" does not match the URL id "${id}"`);
+    // A live edit applies to a settled run: wait for a node that is finishing (bounded).
+    await engine.whenEditable(id);
     if (baseHash !== undefined) {
       // Check and write are synchronous, so no other save can slip in between.
       const current = graphs.currentHash(id);

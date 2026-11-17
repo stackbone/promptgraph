@@ -31,10 +31,10 @@ export interface LoadedGraph {
 }
 
 /**
- * Called before every save/delete with the graph id; throws to refuse the write. The engine installs
- * one that rejects graphs with an active run (§5 "editable only when no run is active").
+ * Called before a graph file is written (`next`, parsed) or deleted (`next` null); throws to refuse it. The engine
+ * installs one that applies a save of a graph with an active run to the run first (live edit, §8.7).
  */
-export type GraphWriteGuard = (graphId: string) => void;
+export type GraphWriteGuard = (graphId: string, next: Graph | null) => void;
 
 /** sha256 hex of a graph file's bytes. */
 export function hashContent(content: string | Buffer): string {
@@ -162,7 +162,7 @@ export class GraphStore {
   /** Parses with GraphSchema (fills defaults), writes, returns the stored graph + new hash. */
   save(graph: Graph): LoadedGraph {
     const parsed = GraphSchema.parse(graph);
-    this.writeGuard?.(parsed.id);
+    this.writeGuard?.(parsed.id, parsed);
     this.ensureDir();
     const content = serializeGraph(parsed);
     const file = this.fileOf(parsed.id);
@@ -178,7 +178,7 @@ export class GraphStore {
   /** @throws GraphNotFoundError */
   delete(id: string): void {
     if (!this.readRaw(id)) throw new GraphNotFoundError(id);
-    this.writeGuard?.(id);
+    this.writeGuard?.(id, null);
     fs.rmSync(this.fileOf(id), { force: true });
     this.ownWrites.set(id, null);
     this.bus.emit("graphs:changed", { repoId: this.repoId, graphId: id });

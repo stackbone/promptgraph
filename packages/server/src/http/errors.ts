@@ -24,6 +24,8 @@ const ENGINE_STATUS: Record<EngineError["code"], ContentfulStatusCode> = {
   run_active: 409,
   invalid_state: 409,
   load_error: 422,
+  run_edit_refused: 409,
+  run_busy: 409,
 };
 
 /** Maps any thrown value to an ApiError response (CONTRACTS § HTTP). */

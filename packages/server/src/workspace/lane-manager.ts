@@ -95,6 +95,20 @@ export class LaneManager {
     return lane;
   }
 
+  /**
+   * §8.7: a fork added by a live edit after a node that already finished. The branch starts at the parent of
+   * the node's end snapshot (§9.7: the lane's HEAD when the node finished), the worktree is reset to the
+   * snapshot's tree and checkpointed, so the lane holds exactly what the node left.
+   */
+  async createLaneFromSnapshot(run: Run, planned: PlannedLane, snapshotSha: string, afterLabel: string): Promise<Lane> {
+    const lane = await this.createLane(run, planned, `${snapshotSha}^`);
+    await this.withLaneLock(lane, async () => {
+      await gitOk(lane.worktreePath, ["read-tree", "-u", "--reset", snapshotSha]);
+      await checkpointIfDirty(lane.worktreePath, afterLabel);
+    });
+    return lane;
+  }
+
   /** §9.3: `git add -A && git commit -m "pg: checkpoint after <label>" --no-verify` if dirty. Returns new sha or null. */
   checkpoint(lane: Lane, afterLabel: string): Promise<string | null> {
     return this.withLaneLock(lane, () => checkpointIfDirty(lane.worktreePath, afterLabel));

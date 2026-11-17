@@ -86,7 +86,7 @@ describe("Engine.startRun", () => {
     expect(s.engine.activeRunForGraph("flow")).toBe(first.run.id);
   });
 
-  it("keeps the run snapshot immutable and blocks graph edits while the run is active", async () => {
+  it("refuses graph-level edits while the run is active and ignores external file edits", async () => {
     const runner = new FakeRunner(() => {});
     const s = setup(allTypes(runner));
     const graph = makeGraph([{ id: "a" }], []);

@@ -6,6 +6,7 @@ import { API, GraphSchema, type Graph, type RepoSummary } from "@promptgraph/sha
 import { afterEach, describe, expect, it } from "vitest";
 import { getPaths } from "../src/config/paths.js";
 import { startDaemon } from "../src/daemon/start.js";
+import { EngineError } from "../src/engine/engine.js";
 import type { McpEnvironment } from "../src/mcp/connection.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { createTempRepo, fakeClaudeEnv, tempDir } from "./helpers.js";
@@ -178,14 +179,32 @@ describe("patch_graph MCP tool", () => {
     expect(g.nodes.map((n) => n.id)).toContain("lint");
   });
 
-  it("refuses while a run of the graph is active", { timeout: 20_000 }, async () => {
+  it("edits the active run live and explains a refused edit (§8.7)", { timeout: 20_000 }, async () => {
     const { call, server, repoId } = await setup();
     const { engine } = await server.ctx.registry.load(repoId);
     const original = engine.activeRunForGraph.bind(engine);
     engine.activeRunForGraph = (id: string) => (id === "flow" ? "run-1" : original(id));
-    const res = await call("patch_graph", { graphId: "flow", ops: [{ op: "remove_node", id: "lint" }] });
-    expect(res.isError).toBe(true);
-    expect(res.text).toContain("read-only");
+    engine.getRunLocks = () => ({ lint: "frozen" });
+    const applied: string[][] = [];
+    engine.editRun = (_runId, next) => {
+      if (!next.nodes.some((n) => n.id === "lint")) {
+        throw new EngineError("run_edit_refused", "refused", [{ code: "frozen_node", nodeId: "lint", message: '"Lint" already started in this run: it cannot be removed' }]);
+      }
+      applied.push(next.nodes.map((n) => n.id));
+    };
+
+    const refused = await call("patch_graph", { graphId: "flow", ops: [{ op: "remove_node", id: "lint" }] });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("Nothing was saved");
+    expect(refused.text).toContain('"Lint" already started in this run');
+    expect(applied).toEqual([]);
+
+    const ok = await call("patch_graph", { graphId: "flow", ops: [{ op: "update_node", id: "lint", label: "Lint again" }] });
+    expect(ok.isError).toBeFalsy();
+    expect(ok.text).toContain("applies to it live");
+    expect(applied).toHaveLength(1);
+    const read = await call("get_graph", { graphId: "flow" });
+    expect(read.text).toContain('"runLocks"');
   });
 });
 

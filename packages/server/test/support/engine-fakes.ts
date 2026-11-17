@@ -100,6 +100,10 @@ export class FakeLanes {
     this.bus.emit("lane:update", { lane });
     return lane;
   }
+  async createLaneFromSnapshot(run: Run, planned: PlannedLane, snapshotSha: string, afterLabel: string): Promise<Lane> {
+    this.calls.push(`snapshot-fork:${planned.id}:${snapshotSha}:${afterLabel}`);
+    return this.createLane(run, planned, `${snapshotSha}^`);
+  }
   async checkpoint(lane: Lane, afterLabel: string): Promise<string | null> {
     this.calls.push(`checkpoint:${lane.id}:${afterLabel}`);
     return null;

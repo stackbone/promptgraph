@@ -23,6 +23,8 @@ const ENGINE_METHODS = [
   "cleanupRun",
   "deleteRun",
   "activeRunForGraph",
+  "whenEditable",
+  "getRunLocks",
   "done",
   "fail",
   "retry",
@@ -48,7 +50,7 @@ export type EngineMock = Record<(typeof ENGINE_METHODS)[number], Mock<AnyFn>>;
 export function mockEngine(): EngineMock {
   const engine = Object.fromEntries(ENGINE_METHODS.map((m) => [m, vi.fn()])) as EngineMock;
   engine.activeRunForGraph.mockReturnValue(null);
-  for (const m of ["cancelRun", "cleanupRun", "deleteRun", "resumeRun", "prune", "shutdown", "drain"] as const) engine[m].mockResolvedValue(undefined);
+  for (const m of ["cancelRun", "cleanupRun", "deleteRun", "resumeRun", "prune", "shutdown", "drain", "whenEditable"] as const) engine[m].mockResolvedValue(undefined);
   engine.supportedNodeTypes.mockReturnValue(["prompt", "command", "shell", "commit"]);
   return engine;
 }
