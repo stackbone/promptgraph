@@ -182,22 +182,27 @@ export const LoopStateSchema = z.object({
 });
 export type LoopState = z.infer<typeof LoopStateSchema>;
 
+export const BriefEntryKindSchema = z.enum(["node", "run", "status"]);
+export type BriefEntryKind = z.infer<typeof BriefEntryKindSchema>;
+
 /** pending: the summary is being written; ready: title + summary set; failed: the call failed (error). */
 export const BriefEntryStatusSchema = z.enum(["pending", "ready", "failed"]);
 export type BriefEntryStatus = z.infer<typeof BriefEntryStatusSchema>;
 
 /**
- * One entry of a run's brief (§13.6): the summary of a finished step (`kind` "node") or, at the end, of the whole
- * run (`kind` "run"). Entries are ordered by `id` (the order the steps finished in).
+ * One entry of a run's brief (§13.6): the summary of a finished step (`kind` "node"), at the end, of the whole run
+ * (`kind` "run"), or the run's current status (`kind` "status": a few lines on what is done, how it is going and
+ * what is left, rewritten after every other entry; the newest ready one is the current status). Entries are
+ * ordered by `id` (the order they were written in).
  */
 export const RunBriefEntrySchema = z.object({
   id: z.number().int(),
   runId: z.string(),
-  kind: z.enum(["node", "run"]),
-  /** kind "node": the node run summarised; null for the run entry. */
+  kind: BriefEntryKindSchema,
+  /** kind "node": the node run summarised; null for the run and status entries. */
   nodeRunId: z.string().nullable(),
   nodeId: z.string().nullable(),
-  /** How the step (NodeStatus) or the run (RunStatus) ended. */
+  /** How the step (NodeStatus) or the run (RunStatus) ended; kind "status": the run's status when it was written. */
   outcome: z.string(),
   status: BriefEntryStatusSchema,
   /** One line: what the step achieved. Null until ready. */

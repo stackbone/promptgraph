@@ -8,6 +8,14 @@ import { makeNodeRun } from "./support/runner-ctx.js";
 
 const usage = { inputTokens: 10, outputTokens: 5, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0.01, model: "haiku" };
 
+/** The brief without its status entries (the timeline: steps and the closing entry). */
+function timeline(s: ReturnType<typeof setup>, runId: string) {
+  return s.store.listBriefEntries(runId).filter((e) => e.kind !== "status");
+}
+
+/** Status prompts are told apart from the step and run ones by their opening line. */
+const isStatusPrompt = (input: SummarizeInput) => input.prompt.startsWith("You keep the status line");
+
 function briefSetup(summarize: Summarize, runner = new FakeRunner()) {
   let briefer!: RunBriefer;
   const s = setup(allTypes(runner), {
@@ -21,7 +29,10 @@ function briefSetup(summarize: Summarize, runner = new FakeRunner()) {
 describe("run brief (§13.6)", () => {
   it("summarises each finished step and then the whole run, each call seeing the entries before it", async () => {
     const inputs: SummarizeInput[] = [];
+    let calls = 0;
     const summarize: Summarize = async (input) => {
+      calls++;
+      if (isStatusPrompt(input)) return { summary: { title: "status", summary: "- fine" }, usage };
       inputs.push(input);
       return { summary: { title: `Title ${inputs.length}`, summary: `Summary ${inputs.length}` }, usage };
     };
@@ -30,10 +41,10 @@ describe("run brief (§13.6)", () => {
 
     const detail = await s.engine.startRun("flow");
     await waitRun(s, detail.run.id, "succeeded");
-    await waitFor(() => s.store.listBriefEntries(detail.run.id).length === 3 && s.store.listBriefEntries(detail.run.id).every((e) => e.status !== "pending"), 3000);
+    await waitFor(() => timeline(s, detail.run.id).length === 3 && timeline(s, detail.run.id).every((e) => e.status !== "pending"), 3000);
     await briefer().idle(detail.run.id);
 
-    const entries = s.store.listBriefEntries(detail.run.id);
+    const entries = timeline(s, detail.run.id);
     expect(entries.map((e) => [e.kind, e.nodeId, e.outcome, e.status, e.title])).toEqual([
       ["node", "a", "succeeded", "ready", "Title 1"],
       ["node", "b", "succeeded", "ready", "Title 2"],
@@ -55,8 +66,8 @@ describe("run brief (§13.6)", () => {
     for (const heading of ["### How it went", "### What changed", "### Decisions", "### To check"]) expect(inputs[2]!.prompt).toContain(heading);
 
     // The summaries' own usage counts in the run's cost; the detail carries the brief.
-    expect(s.store.getRunSummary(detail.run.id)!.usage.costUsd).toBeCloseTo(0.03);
-    expect(s.engine.getRun(detail.run.id).brief).toHaveLength(3);
+    expect(s.store.getRunSummary(detail.run.id)!.usage.costUsd).toBeCloseTo(0.01 * calls);
+    expect(s.engine.getRun(detail.run.id).brief).toHaveLength(s.store.listBriefEntries(detail.run.id).length);
     // Every entry is announced pending, then ready.
     expect(briefEvents.filter((e) => e.entry.id === entries[0]!.id).map((e) => e.entry.status)).toEqual(["pending", "ready"]);
     expect(briefEvents.every((e) => e.repoId === "repo-0123abcd")).toBe(true);
@@ -94,9 +105,9 @@ describe("run brief (§13.6)", () => {
 
     const detail = await s.engine.startRun("flow");
     await waitRun(s, detail.run.id, "failed");
-    await waitFor(() => s.store.listBriefEntries(detail.run.id).length === 3, 3000);
+    await waitFor(() => timeline(s, detail.run.id).length === 3, 3000);
     await briefer().idle(detail.run.id);
-    const entries = s.store.listBriefEntries(detail.run.id);
+    const entries = timeline(s, detail.run.id);
     expect(entries.map((e) => [e.kind, e.outcome, e.status, e.error])).toEqual([
       ["node", "succeeded", "ready", null],
       ["node", "failed", "failed", "claude -p timed out"],
@@ -130,12 +141,71 @@ describe("run brief (§13.6)", () => {
     expect(s.store.getBriefEntry(pending.id)).toMatchObject({ status: "failed", error: INTERRUPTED_BRIEF_ERROR });
   });
 
+  it("keeps a short status of the run, rewritten after each entry with haiku whatever the brief's model", async () => {
+    const statusInputs: SummarizeInput[] = [];
+    const summarize: Summarize = async (input) => {
+      if (!isStatusPrompt(input)) return { summary: { title: "step", summary: "s" }, usage: null };
+      statusInputs.push(input);
+      return { summary: { title: `Status ${statusInputs.length}`, summary: "- Done: A\n- Left: B" }, usage: null };
+    };
+    const runner = new FakeRunner((e) => queueMicrotask(() => (e.ctx.node.id === "b" ? e.failWith("tests failed") : e.succeed())));
+    const { s, briefer } = briefSetup(summarize, runner);
+    s.graphs.save(makeGraph([{ id: "a" }, { id: "b", onError: "fail-run" }], [["a", "b"]], { brief: { enabled: true, model: "sonnet" } }));
+
+    const detail = await s.engine.startRun("flow");
+    await waitRun(s, detail.run.id, "failed");
+    await waitFor(() => timeline(s, detail.run.id).length === 3, 3000);
+    await briefer().idle(detail.run.id);
+
+    const entries = s.store.listBriefEntries(detail.run.id);
+    const statuses = entries.filter((e) => e.kind === "status");
+    // At least the one after the closing entry; superseded requests may be dropped, never more than one per entry.
+    expect(statuses.length).toBeGreaterThanOrEqual(1);
+    expect(statuses.length).toBeLessThanOrEqual(3);
+    expect(entries.at(-1)).toMatchObject({ kind: "status", status: "ready", outcome: "failed", nodeId: null, summary: "- Done: A\n- Left: B" });
+    expect(entries.at(-1)!.title).toBe(`Status ${statusInputs.length}`);
+    expect(statusInputs.every((i) => i.model === "haiku")).toBe(true);
+
+    // The last one sees every step's state, the closing entry and the status before it.
+    const last = statusInputs.at(-1)!.prompt;
+    expect(last).toContain("Run: failed");
+    expect(last).toContain("(the run has ended)");
+    expect(last).toContain("- A (prompt): succeeded");
+    expect(last).toContain("- B (prompt): failed; error: tests failed");
+    expect(last).toContain("Summary of the whole run: step");
+    if (statusInputs.length > 1) expect(last).toContain("Previous status:\nStatus");
+  });
+
+  it("drops a queued status request superseded by a newer one", async () => {
+    const releases: Array<() => void> = [];
+    const prompts: string[] = [];
+    const summarize: Summarize = (input) =>
+      new Promise((resolve) => {
+        prompts.push(input.prompt);
+        releases.push(() => resolve({ summary: { title: "t", summary: "s" }, usage: null }));
+      });
+    const runner = new FakeRunner((e) => queueMicrotask(() => e.succeed()));
+    const { s, briefer } = briefSetup(summarize, runner);
+    // Two independent steps: both finish while the first summary is still being written.
+    s.graphs.save(makeGraph([{ id: "a" }, { id: "b" }], [], { brief: { enabled: true } }));
+    const detail = await s.engine.startRun("flow");
+    await waitRun(s, detail.run.id, "succeeded");
+    // Queue: a, status, b, status, run, status → only the last status request runs.
+    for (let i = 0; i < 4; i++) {
+      await waitFor(() => releases.length > i, 3000);
+      releases[i]!();
+    }
+    await briefer().idle(detail.run.id);
+    expect(prompts.filter((p) => p.startsWith("You keep the status line"))).toHaveLength(1);
+    expect(s.store.listBriefEntries(detail.run.id).map((e) => e.kind)).toEqual(["node", "node", "run", "status"]);
+  });
+
   it("goes away with its run", async () => {
     const { s, briefer } = briefSetup(async () => ({ summary: { title: "t", summary: "s" }, usage: null }));
     s.graphs.save(makeGraph([{ id: "a" }], [], { brief: { enabled: true } }));
     const detail = await s.engine.startRun("flow");
     await waitRun(s, detail.run.id, "succeeded");
-    await waitFor(() => s.store.listBriefEntries(detail.run.id).length === 2, 3000);
+    await waitFor(() => timeline(s, detail.run.id).length === 2, 3000);
     await briefer().idle(detail.run.id);
     await s.engine.deleteRun(detail.run.id);
     expect(s.store.listBriefEntries(detail.run.id)).toEqual([]);

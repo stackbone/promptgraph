@@ -275,6 +275,7 @@ function OutputSection({ nodeRun, reasonShown }: { nodeRun: NodeRun; reasonShown
   );
 }
 
+/** Usage: the cost first, then the token counts as small tiles, then the model. */
 export function UsageSection({
   usage,
   billingMode,
@@ -286,23 +287,35 @@ export function UsageSection({
   title?: string;
 }) {
   const cost = costLabel(usage.costUsd, billingMode);
+  const tokens = [
+    { label: "Input", value: usage.inputTokens },
+    { label: "Output", value: usage.outputTokens },
+    { label: "Cache write", value: usage.cacheCreationTokens },
+    { label: "Cache read", value: usage.cacheReadTokens },
+  ];
   return (
     <Section title={title}>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-        <span className="text-muted-foreground">Input</span>
-        <span className="text-right font-mono">{formatTokens(usage.inputTokens)}</span>
-        <span className="text-muted-foreground">Output</span>
-        <span className="text-right font-mono">{formatTokens(usage.outputTokens)}</span>
-        <span className="text-muted-foreground">Cache write</span>
-        <span className="text-right font-mono">{formatTokens(usage.cacheCreationTokens)}</span>
-        <span className="text-muted-foreground">Cache read</span>
-        <span className="text-right font-mono">{formatTokens(usage.cacheReadTokens)}</span>
-        <span className="font-medium text-foreground/85">{billingMode === "subscription" ? "API-equivalent cost" : "Estimated cost"}</span>
-        <span className="text-right font-mono font-medium text-foreground" title={cost.title}>
+      <div className="flex items-baseline justify-between gap-2" data-testid="usage-cost">
+        <span className="text-xs text-muted-foreground">{billingMode === "subscription" ? "API-equivalent cost" : "Estimated cost"}</span>
+        <span className="font-mono text-lg font-semibold text-foreground tabular-nums" title={cost.title}>
           {cost.text}
         </span>
       </div>
-      {usage.model && <p className="text-[11px] text-muted-foreground">Model: {usage.model}</p>}
+      <div className="grid grid-cols-2 gap-1.5">
+        {tokens.map((t) => (
+          <div key={t.label} className="rounded-md border border-border bg-muted/40 px-2.5 py-1.5">
+            <div className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">{t.label}</div>
+            <div className="font-mono text-sm text-foreground tabular-nums" title={`${t.value.toLocaleString()} tokens`}>
+              {formatTokens(t.value)}
+            </div>
+          </div>
+        ))}
+      </div>
+      {usage.model && (
+        <p className="text-[11px] text-muted-foreground">
+          Model <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-foreground/80">{usage.model}</span>
+        </p>
+      )}
     </Section>
   );
 }

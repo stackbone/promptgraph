@@ -71,6 +71,36 @@ describe("run brief in the inspector (§13.6)", () => {
     expect(screen.getByText("All done")).toBeTruthy();
   });
 
+  it("shows the newest status above the timeline, apart from it, and says when it is being rewritten", async () => {
+    const status = (patch: Partial<RunBriefEntry> & Pick<RunBriefEntry, "id">) =>
+      entryOf({ kind: "status", nodeRunId: null, nodeId: null, outcome: "running", ...patch });
+    view.run.getState().showRun({
+      ...runDetailOf(briefGraph(true), []),
+      brief: [
+        entryOf({ id: 1, title: "Implemented the parser" }),
+        status({ id: 2, title: "1 of 2 steps done, all fine", summary: "- Left: **Test**" }),
+      ],
+    });
+    view.render(<Inspector />);
+    expect(screen.getByTestId("brief-status").textContent).toContain("1 of 2 steps done, all fine");
+    expect(screen.getByText("Left:", { exact: false })).toBeTruthy();
+    // Status entries are not part of the timeline.
+    expect(screen.getAllByTestId("brief-entry")).toHaveLength(1);
+    // Order: the status, then the usage, then the timeline.
+    const [statusBox, cost, timelineEntry] = [screen.getByTestId("brief-status"), screen.getByTestId("usage-cost"), screen.getAllByTestId("brief-entry")[0]!];
+    expect(statusBox.compareDocumentPosition(cost) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(cost.compareDocumentPosition(timelineEntry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // A newer one being written keeps the current text and says it is updating; then replaces it.
+    view.run.getState().applyBriefUpdate(status({ id: 3, status: "pending" }));
+    expect(await screen.findByText("Updating…")).toBeTruthy();
+    expect(screen.getByTestId("brief-status").textContent).toContain("1 of 2 steps done, all fine");
+    view.run.getState().applyBriefUpdate(status({ id: 3, title: "Test failed", updatedAt: 2000 }));
+    expect(await screen.findByText("Test failed")).toBeTruthy();
+    expect(screen.queryByText("1 of 2 steps done, all fine")).toBeNull();
+    expect(screen.queryByText("Updating…")).toBeNull();
+  });
+
   it("tells how to turn it on when the graph has it off", () => {
     view.run.getState().showRun(runDetailOf(briefGraph(false), []));
     view.render(<Inspector />);
