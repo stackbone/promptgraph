@@ -218,6 +218,11 @@ export interface PlannedLane {
   forkAfterNodeId: string | null;
   /** First node executed in the lane (gets the workspace-setup badge). */
   firstNodeId: string;
+  /**
+   * Live edits (§8.7): a fork added after `forkAfterNodeId` had already finished starts from that node's end
+   * snapshot (§9.7) instead of the parent lane's current HEAD.
+   */
+  fromSnapshot?: string;
 }
 
 export interface LanePlan {
@@ -233,6 +238,16 @@ export interface LanePlan {
   edgeLane: Map<string, string>;
 }
 
+/** Live edits (§8.7): stay close to an earlier plan of the same run. */
+export interface LanePlanOptions {
+  /** The plan the run used so far: its lane ids are kept wherever the structure allows it. */
+  previous?: LanePlan;
+  /** Preferred lane per node (default `previous.laneOf`): a fan-out keeps the parent's lane for the target that had it. */
+  prefer?: ReadonlyMap<string, string>;
+  /** Lane ids never given to a new lane (lanes already created in the run). */
+  reserved?: Iterable<string>;
+}
+
 /**
  * Lane rules:
  * 1. each root starts a new lane from baseBranch (root lanes are numbered first, in canvas order);
@@ -242,23 +257,45 @@ export interface LanePlan {
  *    its failure path); a node with an "always" edge has no exclusive groups (every edge may fire with it);
  * 4. merge continues the lane of its first input (canvas order) and merges the others.
  * Non-merge joins (Phase 2 exclusive joins) take the lane of their first input.
+ *
+ * With `opts.previous` (live edits, §8.7), "first" means the target or input whose preferred lane it is
+ * when there is one, and a lane with the same parent and fork point as one of the previous plan keeps its
+ * id (and index); new lanes get ids no earlier lane used.
  */
-export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">): LanePlan {
+export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">, opts: LanePlanOptions = {}): LanePlan {
   const topo = buildTopology(graph);
   const { order } = topologicalOrder(topo);
   const lanes: PlannedLane[] = [];
   const laneOf = new Map<string, string>();
   const mergeSources = new Map<string, string[]>();
   const edgeLane = new Map<string, string>();
+  const prev = opts.previous;
+  const prefer = opts.prefer ?? prev?.laneOf ?? new Map<string, string>();
+  const prevLanes = new Map((prev?.lanes ?? []).map((l) => [l.id, l] as const));
+  const taken = new Set<string>([...prevLanes.keys(), ...(opts.reserved ?? [])]);
+  const used = new Set<string>();
+  let nextIndex = Math.max(-1, ...(prev?.lanes ?? []).map((l) => l.index)) + 1;
 
-  const newLane = (firstNodeId: string, parentLaneId: string | null, forkAfterNodeId: string | null): string => {
-    const id = lanes.length === 0 ? "main" : `l${lanes.length + 1}`;
-    lanes.push({ id, index: lanes.length, parentLaneId, forkAfterNodeId, firstNodeId });
+  const freshId = (): string => {
+    if (!prev) return lanes.length === 0 ? "main" : `l${lanes.length + 1}`;
+    for (let n = 2; ; n++) if (!taken.has(`l${n}`) && !used.has(`l${n}`)) return `l${n}`;
+  };
+  const newLane = (firstNodeId: string, parentLaneId: string | null, forkAfterNodeId: string | null, candidates: Array<string | undefined> = []): string => {
+    for (const id of candidates) {
+      const old = id === undefined ? undefined : prevLanes.get(id);
+      if (!old || used.has(old.id) || old.parentLaneId !== parentLaneId || old.forkAfterNodeId !== forkAfterNodeId) continue;
+      used.add(old.id);
+      lanes.push({ ...old, firstNodeId });
+      return old.id;
+    }
+    const id = freshId();
+    used.add(id);
+    lanes.push({ id, index: prev ? nextIndex++ : lanes.length, parentLaneId, forkAfterNodeId, firstNodeId });
     return id;
   };
 
   // Root lanes first so their ids do not depend on traversal order.
-  const rootLane = new Map(findRoots(topo).map((r) => [r.id, newLane(r.id, null, null)] as const));
+  const rootLane = new Map(findRoots(topo).map((r) => [r.id, newLane(r.id, null, null, [prefer.get(r.id)])] as const));
 
   for (const node of order) {
     const inputs = topo.incoming.get(node.id)!;
@@ -267,11 +304,12 @@ export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">): LanePlan
       lane = rootLane.get(node.id)!;
     } else {
       const inputLanes = inputs.map((e) => edgeLane.get(e.id)!);
-      lane = inputLanes[0]!;
+      const preferred = prefer.get(node.id);
+      lane = preferred !== undefined && inputLanes.includes(preferred) ? preferred : inputLanes[0]!;
       if (node.type === "merge") {
         mergeSources.set(
           node.id,
-          [...new Set(inputLanes.slice(1))].filter((l) => l !== lane),
+          [...new Set(inputLanes)].filter((l) => l !== lane),
         );
       }
     }
@@ -286,15 +324,17 @@ export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">): LanePlan
       groups.set(k, [...(groups.get(k) ?? []), e]);
     }
     for (const edges of groups.values()) {
-      // Edges are already in canvas order of their targets; first keeps the lane.
-      const seenTargets = new Map<string, string>();
-      edges.forEach((e, i) => {
-        const existing = seenTargets.get(e.target);
-        const granted = existing ?? (i === 0 ? lane : newLane(e.target, lane, node.id));
+      // Edges are already in canvas order of their targets; first (or the preferred one) keeps the lane.
+      const keeperIndex = prev ? Math.max(0, edges.findIndex((e) => prefer.get(e.target) === lane)) : 0;
+      const keeper = edges[keeperIndex]!.target;
+      const seenTargets = new Map<string, string>([[keeper, lane]]);
+      for (const e of edges) {
+        const granted = seenTargets.get(e.target) ?? newLane(e.target, lane, node.id, [prev?.edgeLane.get(e.id), prefer.get(e.target)]);
         seenTargets.set(e.target, granted);
         edgeLane.set(e.id, granted);
-      });
+      }
     }
   }
+  if (prev) lanes.sort((a, b) => a.index - b.index);
   return { lanes, laneOf, mergeSources, edgeLane };
 }

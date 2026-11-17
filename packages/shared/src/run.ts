@@ -145,6 +145,8 @@ export const RunSummarySchema = z.object({
   billingMode: BillingModeSchema.nullable(),
   /** Worktrees were removed (cleanup done). */
   cleanedUp: z.boolean(),
+  /** Live edits applied to the run's snapshot (§8.7); 0 = the graph as it was at start. */
+  graphRev: z.number().int().default(0),
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 

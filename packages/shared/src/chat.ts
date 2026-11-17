@@ -138,7 +138,7 @@ export const ChatContextSchema = z.object({
   selectedNodeIds: z.array(z.string()),
   selectedEdgeIds: z.array(z.string()),
   runId: z.string().nullable(),
-  /** The graph on screen is read-only (a run is active or a historical run is shown). */
+  /** The graph on screen cannot be edited (a run that already ended is shown, or the graph failed to load); false during an active run (live edits, §8.7). */
   readOnly: z.boolean(),
   /** Identifiers of the Linear issues the graph on screen is linked to (§24); absent or empty when none. */
   issues: z.array(z.string()).optional(),

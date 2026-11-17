@@ -3,6 +3,7 @@ import { GraphSchema, NodeTypeSchema } from "./graph.js";
 import { GraphIssueSchema, LinearUpdateDecisionSchema, LinearUpdateProposalSchema, MAX_GRAPH_ISSUES } from "./linear.js";
 import { RepoIdSchema } from "./repos.js";
 import { LaneSchema, NodeRunSchema, RunDetailSchema, RunSummarySchema } from "./run.js";
+import { RunLocksSchema } from "./run-edit.js";
 import { RunStatusSchema } from "./status.js";
 import { ValidationResultSchema } from "./validation/types.js";
 import { VoiceSettingsSchema } from "./voice.js";
@@ -142,13 +143,16 @@ export const GetGraphResponseSchema = z.object({
   hash: z.string(),
   /** File changed outside the app since the last run of this graph (§14). */
   modifiedOutside: z.boolean(),
-  /** A run of this graph is active; the graph is read-only. */
+  /** A run of this graph is active: only its steps that have not started can change (§8.7). */
   activeRunId: z.string().nullable(),
+  /** With an active run: lock level of each node that already started (absent nodes are editable). */
+  runLocks: RunLocksSchema.optional(),
 });
 export type GetGraphResponse = z.infer<typeof GetGraphResponseSchema>;
 
 /**
- * PUT …/graphs/:id[?baseHash=<hash>] (upsert; body.id must equal :id; 409 while a run is active).
+ * PUT …/graphs/:id[?baseHash=<hash>] (upsert; body.id must equal :id). With an active run it is a live edit of
+ * the run (§8.7): 409 RUN_EDIT_REFUSED_CODE (details RunEditProblem[]) / RUN_BUSY_CODE, 422 validation_failed.
  * With `baseHash` (optimistic concurrency, §21.7), the save is refused with 409
  * ApiError{code: GRAPH_CONFLICT_CODE} when the file's current hash differs (or the graph does not exist).
  * The web editor saves without it.
@@ -415,6 +419,10 @@ function repoApi(repoId: string) {
     chatSessions: `${base}/chat/sessions`,
     /** GET detail · DELETE. */
     chatSession: (id: string) => `${base}/chat/sessions/${enc(id)}`,
+    /** GET → GitLogResponse: the commit history for the Git graph panel (§13.7). */
+    gitLog: (limit?: number) => `${base}/git/log${limit ? `?limit=${limit}` : ""}`,
+    /** GET → GitStateResponse: HEAD, status and the signature the Git graph polls (§13.7). */
+    gitState: `${base}/git/state`,
   } as const;
 }
 export type RepoApiPaths = ReturnType<typeof repoApi>;
@@ -450,6 +458,8 @@ export const API = {
   rotateToken: "/api/daemon/token/rotate",
   /** GET → UsageLimitsResponse (§23.3). */
   usageLimits: "/api/daemon/usage-limits",
+  /** POST → UsageLimitsResponse: asks Claude Code (`claude -p /usage`, no tokens) first; at most every 30 s (§23.3). */
+  refreshUsageLimits: "/api/daemon/usage-limits/refresh",
   sessions: "/api/daemon/sessions",
   session: (idOrAll: string) => `/api/daemon/sessions/${enc(idOrAll)}`,
   login: "/login",

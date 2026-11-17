@@ -52,6 +52,7 @@ const run: RunSummary = {
   usage: emptyUsage(),
   billingMode: null,
   cleanedUp: false,
+  graphRev: 0,
 };
 
 describe("repository ids and summaries", () => {

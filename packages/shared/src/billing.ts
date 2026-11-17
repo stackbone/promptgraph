@@ -94,7 +94,23 @@ export function usageWindowsOf(limits: UsageLimits, now: number): Array<{ name: 
   return Object.entries(limits.windows)
     .filter(([, w]) => w.resetsAt === null || w.resetsAt > now)
     .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b))
-    .map(([name, window]) => ({ name, label: WINDOW_LABELS[name] ?? name.replace(/_/g, " "), window }));
+    .map(([name, window]) => ({ name, label: windowLabel(name), window }));
+}
+
+const WINDOW_SHORT_LABELS: Record<string, string> = { five_hour: "5h", seven_day: "week", overage: "extra" };
+
+/** Compact name of a window for the badge's ticker: "5h", "week", "opus", "fable". */
+export function usageWindowShortLabel(name: string): string {
+  return WINDOW_SHORT_LABELS[name] ?? /^seven_day_(.+)$/.exec(name)?.[1]?.replace(/_/g, " ") ?? name.replace(/_/g, " ");
+}
+
+/** "Weekly (Opus)"; a weekly window of another model (`seven_day_fable`) reads the same way. */
+function windowLabel(name: string): string {
+  const known = WINDOW_LABELS[name];
+  if (known) return known;
+  const model = /^seven_day_(.+)$/.exec(name)?.[1];
+  if (model) return `Weekly (${model.charAt(0).toUpperCase()}${model.slice(1).replace(/_/g, " ")})`;
+  return name.replace(/_/g, " ");
 }
 
 /** "Max 20x", "Pro", "Team"; null when there is no plan. */
