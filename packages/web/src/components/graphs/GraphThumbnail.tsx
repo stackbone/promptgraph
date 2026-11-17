@@ -14,6 +14,8 @@ const TYPE_STYLE: Record<NodeType, string> = {
   prompt: "fill-orange-500/25 stroke-orange-500",
   command: "fill-amber-500/25 stroke-amber-500",
   shell: "fill-emerald-500/25 stroke-emerald-500",
+  app: "fill-lime-500/25 stroke-lime-600",
+  test: "fill-green-500/25 stroke-green-600",
   commit: "fill-sky-500/25 stroke-sky-500",
   pr: "fill-indigo-500/25 stroke-indigo-500",
   approval: "fill-violet-500/25 stroke-violet-500",

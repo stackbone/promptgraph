@@ -1,7 +1,8 @@
-import { DEFAULT_LINEAR_UPDATE_PROMPT, type ConditionEvaluator, type GraphNode, type GraphNodeOf, type GraphSettings, type NodeConfigMap, type NodeType } from "@promptgraph/shared";
+import { DEFAULT_APP_READY_TIMEOUT_SEC, DEFAULT_LINEAR_UPDATE_PROMPT, type RepoApp, type RepoCheck, type ConditionEvaluator, type GraphNode, type GraphNodeOf, type GraphSettings, type NodeConfigMap, type NodeType } from "@promptgraph/shared";
 import { useEffect, useId, useMemo } from "react";
 import { mergeInputLabels } from "../../lib/lanes";
-import { getRepoCache } from "../../store/repo-cache";
+import { getRepoCache, useRepoCache } from "../../store/repo-cache";
+import { openRepoSettings } from "../../store/repo-settings-dialog";
 import { useEditor, useRepo, useView } from "../../store/view/context";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea, parseEnv } from "../common/fields";
 import { DictationTextArea } from "../common/DictationTextArea";
@@ -28,6 +29,10 @@ export function NodeConfigForm({ node, settings, disabled }: { node: GraphNode; 
       return <CommandForm node={node} settings={settings} disabled={disabled} patch={patch} />;
     case "shell":
       return <ShellForm node={node} settings={settings} disabled={disabled} patch={patch} />;
+    case "app":
+      return <AppForm node={node} settings={settings} disabled={disabled} patch={patch} />;
+    case "test":
+      return <TestForm node={node} settings={settings} disabled={disabled} patch={patch} />;
     case "commit":
       return <CommitForm node={node} settings={settings} disabled={disabled} patch={patch} />;
     case "pr":
@@ -169,6 +174,121 @@ function ShellForm({ node, disabled, patch }: FormProps<"shell">) {
     </div>
   );
 }
+
+/** Opens the repository settings dialog (§25.1) from a node form. */
+function RepoSettingsLink({ children }: { children: string }) {
+  const view = useView();
+  return (
+    <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => openRepoSettings(view.repoId)}>
+      {children}
+    </button>
+  );
+}
+
+/** app nodes (§25.3): which of the repository's apps to start, and how long to wait for it. */
+function AppForm({ node, disabled, patch }: FormProps<"app">) {
+  const view = useView();
+  const apps = useRepoCache(view.repoId, (s) => s.repoSettings?.settings.apps ?? EMPTY_APPS);
+  const selected = node.config.appId ? apps.find((a) => a.id === node.config.appId) : apps[0];
+  return (
+    <div className="space-y-3">
+      {apps.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">
+          No application is configured. <RepoSettingsLink>Open the repository settings</RepoSettingsLink> to set one up or analyse the repository.
+        </p>
+      ) : (
+        <Field label="Application" hint="Starts in the lane's worktree; the step succeeds once the app is reachable, and it keeps running until the run ends.">
+          <Select<string>
+            value={node.config.appId ?? ""}
+            disabled={disabled}
+            options={[
+              { value: "", label: `First app (${apps[0]!.name})` },
+              ...apps.map((a) => ({ value: a.id, label: a.name })),
+              ...(node.config.appId && !apps.some((a) => a.id === node.config.appId) ? [{ value: node.config.appId, label: `${node.config.appId} (not configured)` }] : []),
+            ]}
+            onChange={(appId) => patch({ appId: appId || undefined })}
+          />
+        </Field>
+      )}
+      {selected && (
+        <p className="rounded-md bg-muted px-2 py-1.5 font-mono text-[11px] break-all text-muted-foreground">
+          {selected.cwd ? `${selected.cwd}$ ` : "$ "}
+          {selected.run}
+        </p>
+      )}
+      <Field label="Wait for it (seconds)">
+        <OptionalNumber
+          value={node.config.readyTimeoutSec}
+          min={1}
+          placeholder={String(DEFAULT_APP_READY_TIMEOUT_SEC)}
+          disabled={disabled}
+          onChange={(readyTimeoutSec) => patch({ readyTimeoutSec })}
+        />
+      </Field>
+      <p className="text-[11px] text-muted-foreground">
+        Commands and URLs come from the <RepoSettingsLink>repository settings</RepoSettingsLink>.
+      </p>
+    </div>
+  );
+}
+
+/** test nodes (§25.3): which of the repository's checks to run (none ticked = all). */
+function TestForm({ node, disabled, patch }: FormProps<"test">) {
+  const view = useView();
+  const checks = useRepoCache(view.repoId, (s) => s.repoSettings?.settings.checks ?? EMPTY_CHECKS);
+  const chosen = node.config.checks ?? [];
+  // No ids saved = every check; ticking them all again goes back to that, and the last one cannot be unticked.
+  const toggle = (id: string, on: boolean) => {
+    const current = chosen.length ? chosen : checks.map((c) => c.id);
+    const next = checks.map((c) => c.id).filter((c) => (c === id ? on : current.includes(c)));
+    if (next.length === 0) return;
+    patch({ checks: next.length === checks.length ? undefined : next });
+  };
+  return (
+    <div className="space-y-3">
+      {checks.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">
+          No test or check is configured. <RepoSettingsLink>Open the repository settings</RepoSettingsLink> to set them up or analyse the repository.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          <span className="block text-xs font-medium text-muted-foreground">Checks {chosen.length === 0 && "(all)"}</span>
+          {checks.map((c) => (
+            <Checkbox
+              key={c.id}
+              checked={chosen.length === 0 || chosen.includes(c.id)}
+              disabled={disabled}
+              label={
+                <span className="min-w-0">
+                  {c.name} <span className="font-mono text-[10px] text-muted-foreground">{c.run}</span>
+                </span>
+              }
+              onChange={(on) => toggle(c.id, on)}
+            />
+          ))}
+          {chosen.length > 0 && (
+            <button type="button" className="text-[11px] text-muted-foreground underline underline-offset-2" disabled={disabled} onClick={() => patch({ checks: undefined })}>
+              Run every check
+            </button>
+          )}
+        </div>
+      )}
+      <Checkbox
+        checked={node.config.continueOnFailure}
+        disabled={disabled}
+        label="Keep running the other checks after a failure"
+        onChange={(continueOnFailure) => patch({ continueOnFailure })}
+      />
+      <p className="text-[11px] text-muted-foreground">
+        Runs in the lane's worktree. The step fails when any check fails; each result shows in the step's output. Commands come from the{" "}
+        <RepoSettingsLink>repository settings</RepoSettingsLink>.
+      </p>
+    </div>
+  );
+}
+
+const EMPTY_APPS: RepoApp[] = [];
+const EMPTY_CHECKS: RepoCheck[] = [];
 
 function CommitForm({ node, disabled, patch }: FormProps<"commit">) {
   return (

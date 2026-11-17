@@ -12,6 +12,7 @@ import {
   nodeDisplayLabel,
 } from "@promptgraph/shared";
 import { elapsed, formatTime, formatTokens } from "../../lib/format";
+import { openAppUrl } from "../../lib/open-url";
 import { mergeInputLabels } from "../../lib/lanes";
 import { NODE_TYPE_META, configPreview } from "../../lib/node-meta";
 import type { IterationEntry } from "../../lib/run-view";
@@ -221,11 +222,38 @@ function OutputSection({ nodeRun, reasonShown }: { nodeRun: NodeRun; reasonShown
   const o = nodeRun.output;
   if (!o) return null;
   const text = reasonShown ? undefined : o.text;
-  const hasAny = text || o.stdoutTail || o.sha || o.prUrl || o.exitCode !== undefined || o.conflictedFiles?.length || o.approved !== undefined;
+  const hasAny = text || o.stdoutTail || o.sha || o.prUrl || o.exitCode !== undefined || o.conflictedFiles?.length || o.approved !== undefined || o.app || o.checks?.length;
   if (!hasAny) return null;
   return (
     <Section title="Output">
       <div className="space-y-1.5">
+        {o.app && (
+          <DetailRow label={o.app.name}>
+            {o.app.url ? (
+              <button type="button" className="font-mono text-[11px] text-blue-600 hover:underline" onClick={() => void openAppUrl(o.app!.url!)}>
+                {o.app.url}
+              </button>
+            ) : (
+              "URL unknown"
+            )}
+          </DetailRow>
+        )}
+        {o.checks?.length ? (
+          <ul className="space-y-0.5 rounded-md bg-background px-2 py-1.5 text-xs ring-1 ring-border">
+            {o.checks.map((c) => (
+              <li key={c.id} className="flex items-center gap-2">
+                <span className={c.status === "passed" ? "text-green-600" : c.status === "failed" ? "text-red-600" : "text-muted-foreground"}>
+                  {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {c.status === "skipped" ? "not run" : c.status === "failed" ? `exit ${c.exitCode ?? "?"}` : ""}
+                  {c.durationMs !== null ? ` ${(c.durationMs / 1000).toFixed(1)}s` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {o.exitCode !== undefined && <DetailRow label="Exit code">{o.exitCode === null ? "killed" : o.exitCode}{o.timedOut ? " (timed out)" : ""}</DetailRow>}
         {o.sha && <DetailRow label="Commit"><span className="font-mono">{o.sha.slice(0, 12)}</span>{o.noop ? " (nothing to commit)" : ""}</DetailRow>}
         {o.noop && !o.sha && <DetailRow label="Commit">Nothing to commit</DetailRow>}

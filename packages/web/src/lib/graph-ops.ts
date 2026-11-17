@@ -80,14 +80,14 @@ export const DEFAULT_LOOP = { maxIterations: 3, onExhausted: "fail" } as const s
 /**
  * Adds the edge. Phase 2: a connection from the error port is a failure edge (`when: "failure"`), and one that
  * closes a cycle becomes a loop back-edge (§15.4) — an unmarked cycle would only be a validation error. A
- * shell → exit-code condition edge is `always`, so a failing exit code reaches the condition (§15.5).
+ * shell (or Run tests) → exit-code condition edge is `always`, so a failing exit code reaches the condition (§15.5).
  */
 export function connect(graph: Graph, c: ConnectRequest, phase: 1 | 2 = 2): Graph {
   if (connectionError(graph, c, phase)) return graph;
   const source = graph.nodes.find((n) => n.id === c.source);
   const target = graph.nodes.find((n) => n.id === c.target);
   const exitCodeCheck =
-    phase === 2 && c.sourcePort !== "error" && source?.type === "shell" && target?.type === "condition" && target.config.evaluator.kind === "exitCode";
+    phase === 2 && c.sourcePort !== "error" && (source?.type === "shell" || source?.type === "test") && target?.type === "condition" && target.config.evaluator.kind === "exitCode";
   const edge: GraphEdge = {
     id: uniqueId("e", new Set(graph.edges.map((e) => e.id))),
     source: c.source,

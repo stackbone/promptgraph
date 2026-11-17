@@ -28,7 +28,7 @@ export function BottomBarActions() {
       {tab.active &&
         createPortal(
           <div className="order-3 flex shrink-0 items-center">
-            <SettingsMenu repoPath={repoPath} side="top" />
+            <SettingsMenu repoPath={repoPath} repoId={repoId} side="top" />
           </div>,
           tab.bottomBar,
         )}

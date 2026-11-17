@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { setTheme, type Theme, useTheme } from "../../lib/theme";
 import { useDaemonStore } from "../../store/daemon-store";
+import { openRepoSettings } from "../../store/repo-settings-dialog";
 import { toast } from "../../store/toast-store";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
@@ -30,12 +31,13 @@ export const useSettingsMenu = create<{ open: boolean; setOpen(open: boolean): v
 }));
 
 /**
- * App settings menu (theme, desktop notifications toggle, voice dictation and Linear dialogs, repo/version info), at the end of the
+ * App settings menu (theme, desktop notifications toggle, the repository settings (§25.1), voice dictation and Linear
+ * dialogs, repo/version info), at the end of the
  * tab strip. A Radix dropdown menu whose open state lives in `useSettingsMenu`: keyboard navigation, focus return to the
  * trigger, Escape and outside-click dismissal come from Radix. The info text is static content, so it is not
  * focusable. `repoPath`: the repository of the active tab, shown with the version (none on Home).
  */
-export function SettingsMenu({ repoPath = null, side = "bottom" }: { repoPath?: string | null; side?: "top" | "bottom" }) {
+export function SettingsMenu({ repoPath = null, repoId = null, side = "bottom" }: { repoPath?: string | null; repoId?: string | null; side?: "top" | "bottom" }) {
   const open = useSettingsMenu((s) => s.open);
   const settings = useDaemonStore((s) => s.settings);
   const daemon = useDaemonStore((s) => s.info);
@@ -113,6 +115,11 @@ export function SettingsMenu({ repoPath = null, side = "bottom" }: { repoPath?: 
             )}
           </p>
           <DropdownMenuSeparator />
+          {repoId && (
+            <DropdownMenuItem onSelect={() => openRepoSettings(repoId)}>
+              <Icons.app /> Repository settings…
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onSelect={() => setVoiceOpen(true)}>
             <MicIcon /> Voice dictation…
           </DropdownMenuItem>

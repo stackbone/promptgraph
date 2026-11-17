@@ -11,6 +11,7 @@ import { SaveIndicator } from "../components/header/RunControls";
 import { Inspector } from "../components/inspector/Inspector";
 import { RunReport, useAutoOpenReport } from "../components/report/RunReport";
 import { TerminalDrawer } from "../components/terminal/TerminalDrawer";
+import { AppButton } from "../components/toolbar/AppButton";
 import { CanvasToolbar } from "../components/toolbar/CanvasToolbar";
 import { Button as IconButton } from "../components/ui/button";
 import { Sidebar, SidebarProvider, SidebarRail } from "../components/ui/sidebar";
@@ -113,9 +114,9 @@ const FLOATING = "bg-card shadow-soft ring-1 ring-border";
 
 /**
  * Controls floating over the top corners of the canvas. Top left: the graph's linked Linear issues (§24.3). Top
- * right: the autosave indicator and the inspector's collapse / expand button (always shown). Everything else sits in
+ * right: the autosave indicator, the Run app button and the inspector's collapse / expand button (always shown). Everything else sits in
  * the canvas toolbar at the bottom (CanvasToolbar). The rows themselves let pointer events through, so only their
- * contents cover the canvas.
+ * contents cover the canvas. The Run app button (§25.4) sits left of the inspector toggle.
  */
 export function CanvasOverlay() {
   const issues = useEditor((s) => s.graph?.issues);
@@ -128,6 +129,7 @@ export function CanvasOverlay() {
       ) : null}
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-2 *:pointer-events-auto">
         <SaveIndicator />
+        <AppButton />
         <InspectorToggle className={FLOATING} />
       </div>
     </>
