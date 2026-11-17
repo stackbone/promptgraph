@@ -11,7 +11,8 @@ export function Banners() {
   const view = useView();
   const modifiedOutside = useEditor((s) => s.modifiedOutside);
   const externalChange = useEditor((s) => s.externalChange);
-  const canUndoExternal = useEditor((s) => s.externalUndo !== null && s.activeRunId === null);
+  const canUndoExternal = useEditor((s) => s.externalUndo !== null);
+  const runEditError = useEditor((s) => s.runEditError);
   const saving = useEditor((s) => s.saving);
   const activeRunId = useEditor((s) => s.activeRunId);
   const hasGraph = useEditor((s) => s.graph !== null);
@@ -46,9 +47,19 @@ export function Banners() {
           </Button>
         </Banner>
       )}
+      {!runMode && runEditError && (
+        <Banner tone="warning">
+          <span className="min-w-0 truncate" title={runEditError}>
+            Not applied to the active run: {runEditError}
+          </span>
+          <Button size="sm" className="ml-3 shrink-0" onClick={() => void editor.discardLocalEdits()}>
+            Discard changes
+          </Button>
+        </Banner>
+      )}
       {!runMode && activeRunId && (
         <Banner tone="info">
-          A run of this graph is active, so the graph is read-only.
+          A run of this graph is active: changes to the steps that have not started apply to it live. Steps that started are locked.
           <ButtonLink size="sm" className="ml-3" to={webRoutes.run(view.repoId, activeRunId)}>
             View live run
           </ButtonLink>
@@ -56,7 +67,7 @@ export function Banners() {
       )}
       {runMode && run && run.id !== activeRunId && (
         <Banner tone="info">
-          Viewing run #{run.shortId} (read-only snapshot of the graph at run start).
+          Viewing run #{run.shortId} (read-only snapshot of its graph).
           <ButtonLink size="sm" className="ml-3" to={webRoutes.graph(view.repoId, run.graphId)}>
             Back to editor
           </ButtonLink>

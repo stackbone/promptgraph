@@ -78,6 +78,7 @@ function EditCanvas() {
   const selectedNodeIds = useEditor((s) => s.selectedNodeIds);
   const selectedEdgeIds = useEditor((s) => s.selectedEdgeIds);
   const highlightNodeIds = useEditor((s) => s.highlightNodeIds);
+  const runLocks = useEditor((s) => (s.activeRunId ? s.runLocks : undefined));
   const readOnly = useEditor(isReadOnly);
   const [measured, applyMeasured] = useMeasured();
   const { screenToFlowPosition } = useReactFlow();
@@ -88,8 +89,8 @@ function EditCanvas() {
   useUndoRedoShortcuts();
 
   const input = useMemo(
-    () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured, highlightNodeIds } : null),
-    [graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured, highlightNodeIds],
+    () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured, highlightNodeIds, ...(runLocks ? { runLocks } : {}) } : null),
+    [graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured, highlightNodeIds, runLocks],
   );
   const nodes = useMemo(() => (input ? toFlowNodes(input) : []), [input]);
   const edges = useMemo(() => (input ? toFlowEdges(input) : []), [input]);
@@ -130,7 +131,9 @@ function EditCanvas() {
 
   const isValidConnection: IsValidConnection<PgFlowEdge> = useCallback(
     (c) => {
-      const { graph: g, phase: p } = editorStore.getState();
+      const { graph: g, phase: p, activeRunId, runLocks: locks } = editorStore.getState();
+      // §8.7: no new inputs into a step that already started in the active run.
+      if (activeRunId && locks[c.target]) return false;
       return !!g && connectionError(g, toConnectRequest({ source: c.source, target: c.target, sourceHandle: c.sourceHandle ?? null, targetHandle: null }), p) === null;
     },
     [editorStore],

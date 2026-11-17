@@ -1,4 +1,4 @@
-import { edgeWhen, type Graph, type GraphEdge, type Lane, type NodeRun, type ValidationResult } from "@promptgraph/shared";
+import { edgeWhen, isEdgeEditable, type Graph, type GraphEdge, type Lane, type NodeRun, type RunLocks, type ValidationResult } from "@promptgraph/shared";
 import { MarkerType } from "@xyflow/react";
 import type { PgFlowEdge } from "../components/canvas/PgEdge";
 import type { NodeIssues, PgFlowNode } from "../components/nodes/types";
@@ -17,6 +17,8 @@ export interface FlowInput {
   measured: Readonly<Record<string, { width: number; height: number }>>;
   /** Edit mode: nodes changed outside the editor a moment ago (briefly highlighted). */
   highlightNodeIds?: readonly string[];
+  /** Edit mode while a run is active (§8.7): nodes that already started; they and their inputs cannot be deleted. */
+  runLocks?: RunLocks;
   /** Present in run mode. */
   run?: {
     currentByNode: Readonly<Record<string, NodeRun>>;
@@ -48,11 +50,13 @@ export function toFlowNodes(input: FlowInput): PgFlowNode[] {
   return input.graph.nodes.map((node) => {
     const nodeRun = input.run?.currentByNode[node.id] ?? null;
     const m = input.measured[node.id];
+    const lock = input.run ? null : (input.runLocks?.[node.id] ?? null);
     return {
       id: node.id,
       type: "pg" as const,
       position: node.position,
       selected: selected.has(node.id),
+      ...(lock ? { deletable: false } : {}),
       ...(m ? { measured: m } : {}),
       data: {
         node,
@@ -63,6 +67,7 @@ export function toFlowNodes(input: FlowInput): PgFlowNode[] {
         issues: issues.get(node.id) ?? NO_ISSUES,
         phase: input.phase,
         highlighted: highlighted.has(node.id),
+        lock,
       },
     };
   });
@@ -128,6 +133,7 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
       target: edge.target,
       targetHandle: edge.targetPort,
       selected: selected.has(edge.id),
+      ...(!input.run && input.runLocks && !isEdgeEditable(edge, input.runLocks) ? { deletable: false } : {}),
       animated,
       markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
       style: {

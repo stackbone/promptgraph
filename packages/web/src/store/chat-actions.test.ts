@@ -47,8 +47,9 @@ describe("chat actions", () => {
   it("describes the graph on screen and its selection", () => {
     view.editor.getState().setSelection(["a", "b"], ["e1"]);
     expect(currentChatContext(view)).toEqual({ graphId: "g1", graphName: "Graph 1", selectedNodeIds: ["a", "b"], selectedEdgeIds: ["e1"], runId: null, readOnly: false });
+    // §8.7: an active run is edited live.
     view.editor.getState().setActiveRunId("r9");
-    expect(currentChatContext(view)).toMatchObject({ runId: "r9", readOnly: true });
+    expect(currentChatContext(view)).toMatchObject({ runId: "r9", readOnly: false });
   });
 
   it("uses the inspected node of a shown run as the selection", () => {

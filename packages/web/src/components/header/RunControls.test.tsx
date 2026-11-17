@@ -247,7 +247,7 @@ describe("Undo / Redo controls", () => {
     expect(button("Redo").disabled).toBe(false);
   });
 
-  it("stay shown but disabled while a run is shown or active", () => {
+  it("stay shown, disabled while a run is shown and enabled while one is active (live edits)", () => {
     view.editor.setState({ past: [graph], future: [graph] });
     view.run.setState({ selectedRunId: "r1" });
     render(<RunControls />);
@@ -257,7 +257,7 @@ describe("Undo / Redo controls", () => {
       view.run.setState({ selectedRunId: null });
       view.editor.setState({ activeRunId: "r1" });
     });
-    expect(button("Undo").disabled).toBe(true);
-    expect(button("Redo").disabled).toBe(true);
+    expect(button("Undo").disabled).toBe(false);
+    expect(button("Redo").disabled).toBe(false);
   });
 });

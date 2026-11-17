@@ -60,6 +60,7 @@ export function runDetailOf(graph: Graph, nodeRuns: NodeRun[], id = "r1"): RunDe
       usage: emptyUsage(),
       billingMode: null,
       cleanedUp: false,
+      graphRev: 0,
       graphSnapshot: graph,
     },
     lanes: [],

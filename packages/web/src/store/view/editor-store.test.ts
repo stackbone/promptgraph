@@ -81,13 +81,44 @@ describe("editor store", () => {
     expect(after.selectedNodeIds).toEqual([]);
   });
 
-  it("is read-only while a run is active", async () => {
+  it("stays editable while a run is active, except started steps and graph-level fields (§8.7)", async () => {
+    disk = loaded(linearGraph(), { activeRunId: "r1", runLocks: { a: "frozen" } });
+    await useEditorStore.getState().load();
+    const s = useEditorStore.getState();
+    s.rename("Nope");
+    expect(useEditorStore.getState().graph?.name).toBe("Graph 1");
+    // The started step a and its inputs stay; b has not started.
+    s.removeElements(["a"], []);
+    expect(useEditorStore.getState().graph?.nodes.map((n) => n.id)).toEqual(["a", "b"]);
+    const added = s.addNode("shell", { x: 0, y: 300 });
+    expect(added).not.toBeNull();
+    expect(s.connect({ source: added!, target: "a", sourcePort: "out" })).toMatch(/already started/);
+    expect(s.connect({ source: "b", target: added!, sourcePort: "out" })).toBeNull();
+    expect(useEditorStore.getState().dirty).toBe(true);
+  });
+
+  it("keeps edits the active run refuses as unsaved, and discards them on request", async () => {
+    disk = loaded(linearGraph(), { activeRunId: "r1", runLocks: { a: "frozen" } });
+    await useEditorStore.getState().load();
+    save.mockRejectedValueOnce(new ApiRequestError(409, { error: '"Implement" already started in this run', code: "run_edit_refused" }));
+    useEditorStore.getState().updateNode("b", (n) => ({ ...n, label: "Changed" }));
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS);
+    expect(useEditorStore.getState()).toMatchObject({ dirty: true, saveError: null, runEditError: '"Implement" already started in this run' });
+    await useEditorStore.getState().discardLocalEdits();
+    expect(useEditorStore.getState()).toMatchObject({ dirty: false, runEditError: null });
+    expect(useEditorStore.getState().graph?.nodes[1]!.label).toBe("Test");
+  });
+
+  it("saves again shortly when the active run was busy", async () => {
     disk = loaded(linearGraph(), { activeRunId: "r1" });
     await useEditorStore.getState().load();
-    useEditorStore.getState().rename("Nope");
-    expect(useEditorStore.getState().addNode("shell", { x: 0, y: 0 })).toBeNull();
-    expect(useEditorStore.getState().graph?.name).toBe("Graph 1");
-    expect(useEditorStore.getState().dirty).toBe(false);
+    save.mockRejectedValueOnce(new ApiRequestError(409, { error: "busy", code: "run_busy" }));
+    useEditorStore.getState().updateNode("b", (n) => ({ ...n, label: "Changed" }));
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS);
+    expect(save).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(useEditorStore.getState()).toMatchObject({ dirty: false, runEditError: null, saveError: null });
   });
 
   it("reloads a file changed on disk, or flags a conflict when there are local edits", async () => {

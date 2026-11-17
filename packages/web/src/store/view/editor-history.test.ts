@@ -107,7 +107,7 @@ describe("editor store: undo / redo", () => {
 
   it("is disabled while the graph is read-only", () => {
     editor().rename("One");
-    editor().setActiveRunId("r1");
+    store.setState({ loadError: "broken" });
     expect(canUndo(editor())).toBe(false);
     editor().undo();
     expect(editor().graph?.name).toBe("One");

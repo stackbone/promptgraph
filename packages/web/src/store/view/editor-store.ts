@@ -1,6 +1,9 @@
 import {
   GRAPH_CONFLICT_CODE,
+  isEdgeEditable,
   isLaidOut,
+  RUN_BUSY_CODE,
+  RUN_EDIT_REFUSED_CODE,
   layeredLayout,
   validateGraph,
   type GetGraphResponse,
@@ -11,6 +14,8 @@ import {
   type GraphSettings,
   type NodeType,
   type Position,
+  type RunLockLevel,
+  type RunLocks,
   type SaveGraphResponse,
   type ValidationResult,
 } from "@promptgraph/shared";
@@ -51,8 +56,18 @@ export interface EditorStore extends EditorState, EditorValidation {
   /** The graph does not exist (404): the view shows "not found". */
   notFound: boolean;
   saveError: string | null;
-  /** A run of this graph is active: the graph is read-only. */
+  /**
+   * A run of this graph is active: saves are live edits of it (§8.7). Only the steps that have not started can
+   * change, and the graph's name, settings and linked issues are fixed.
+   */
   activeRunId: string | null;
+  /** With an active run: lock level of each node that already started (absent = editable). */
+  runLocks: RunLocks;
+  /**
+   * The active run refused the last save (a started step changed, or the graph is not valid yet): the local
+   * edits stay unsaved until they are fixed or discarded (`discardLocalEdits`).
+   */
+  runEditError: string | null;
   /** The file changed on disk while there were unsaved local edits. */
   externalChange: boolean;
   /** Multi-selection; selectedNodeId/selectedEdgeId are set only when exactly one element is selected. */
@@ -118,6 +133,10 @@ export interface EditorStore extends EditorState, EditorValidation {
   undoExternalChange(): Promise<void>;
   dismissExternalUndo(): void;
   setActiveRunId(runId: string | null): void;
+  /** `run:update` of the active run: refreshes the run locks (debounced), since nodes start and finish. */
+  refreshRunLocks(): void;
+  /** Drops the local edits the active run refused and shows the graph on disk again. */
+  discardLocalEdits(): Promise<void>;
   /** Drops pending edits and stops saving. Returns whether unsaved edits were lost. */
   discard(): boolean;
 }
@@ -150,8 +169,24 @@ export function repoPersistence(repoId: string): EditorPersistence {
 const EMPTY_VALIDATION: ValidationResult = { errors: [], warnings: [] };
 const DEFAULT_VALIDATION: EditorValidation = { phase: 1, supportedNodeTypes: null };
 
-export function isReadOnly(s: Pick<EditorStore, "graph" | "activeRunId" | "loadError">): boolean {
-  return !s.graph || s.activeRunId !== null || s.loadError !== null;
+/** Nothing can be edited: no graph, or it failed to load. An active run leaves it editable (§8.7, see isGraphLocked). */
+export function isReadOnly(s: Pick<EditorStore, "graph" | "loadError">): boolean {
+  return !s.graph || s.loadError !== null;
+}
+
+/** The graph-level fields (name, settings, linked issues) cannot change: read-only, or a run is active (§8.7). */
+export function isGraphLocked(s: Pick<EditorStore, "graph" | "loadError" | "activeRunId">): boolean {
+  return isReadOnly(s) || s.activeRunId !== null;
+}
+
+/** Lock level of a node while a run is active (null: editable). */
+export function nodeLock(s: Pick<EditorStore, "activeRunId" | "runLocks">, nodeId: string): RunLockLevel | null {
+  return s.activeRunId ? (s.runLocks[nodeId] ?? null) : null;
+}
+
+/** Why connecting into `target` is refused while a run is active, or null. */
+function lockedTargetReason(s: Pick<EditorStore, "activeRunId" | "runLocks">, target: string): string | null {
+  return nodeLock(s, target) ? "That step already started in the active run: its inputs cannot change" : null;
 }
 
 type HistoryView = Pick<EditorStore, "graph" | "activeRunId" | "loadError" | "discarded" | "externalUndo" | "saving" | "past" | "future">;
@@ -182,6 +217,10 @@ const NO_SELECTION = { selectedNodeIds: [], selectedEdgeIds: [], selectedNodeId:
 const NO_UNDO = { externalUndo: null, highlightNodeIds: [] };
 const NO_HISTORY = { past: [], future: [] };
 const RUN_ACTIVE_MESSAGE = "A run is active: changes cannot be saved until it finishes.";
+/** Debounce of run-lock refreshes during bursts of run updates. */
+const LOCKS_REFRESH_MS = 250;
+/** Retry delay of a save that met the active run mid-transition (run_busy). */
+const BUSY_RETRY_MS = 1000;
 
 /** JSON with object keys sorted, so two equal values compare equal whatever order their keys were built in. */
 function stableStringify(value: unknown): string {
@@ -226,6 +265,7 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
   /** Key and time of the last edit, to merge the next one with the same key into its undo step. */
   let lastEdit: { key: string; at: number } | null = null;
+  let locksTimer: ReturnType<typeof setTimeout> | null = null;
 
   function clearSaveTimer(): void {
     if (saveTimer) clearTimeout(saveTimer);
@@ -265,10 +305,23 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
           const res = await persistence.save(graph, baseHash);
           const cur = get();
           if (cur.discarded) return;
-          set(cur.graph === graph ? { dirty: false, graphHash: res.hash, saveError: null } : { graphHash: res.hash, saveError: null });
+          set(cur.graph === graph ? { dirty: false, graphHash: res.hash, saveError: null, runEditError: null } : { graphHash: res.hash, saveError: null, runEditError: null });
         } catch (err) {
           if (get().discarded) return;
-          if (isConflict(err)) {
+          const code = err instanceof ApiRequestError ? err.body.code : undefined;
+          if (code === RUN_BUSY_CODE) {
+            // The run was finishing a step: the same edit is saved again in a moment.
+            if (!saveTimer) {
+              saveTimer = setTimeout(() => {
+                saveTimer = null;
+                void runSave();
+              }, BUSY_RETRY_MS);
+            }
+          } else if (code === RUN_EDIT_REFUSED_CODE || (code === "validation_failed" && get().activeRunId)) {
+            // §8.7: the run keeps its graph; the edit stays local until fixed or discarded.
+            set({ runEditError: errorMessage(err), saveError: null });
+            void get().refreshRunLocks();
+          } else if (isConflict(err)) {
             // The file changed since the editor read it: same banner as a change seen while dirty.
             set({ externalChange: true, saveError: null });
           } else if (err instanceof ApiRequestError && err.body.code === "run_active") {
@@ -301,6 +354,8 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
         graphHash: res.hash,
         modifiedOutside: res.modifiedOutside,
         activeRunId: res.activeRunId,
+        runLocks: res.runLocks ?? {},
+        runEditError: null,
         dirty: false,
         loading: false,
         loadError: null,
@@ -332,6 +387,8 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       notFound: false,
       saveError: null,
       activeRunId: null,
+      runLocks: {},
+      runEditError: null,
       externalChange: false,
       selectedNodeIds: [],
       selectedEdgeIds: [],
@@ -360,7 +417,7 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
           if (!get().discarded) applyLoaded(res, false);
         } catch (err) {
           const notFound = err instanceof ApiRequestError && err.status === 404;
-          set({ loading: false, loadError: errorMessage(err), notFound, activeRunId: null, modifiedOutside: false });
+          set({ loading: false, loadError: errorMessage(err), notFound, activeRunId: null, runLocks: {}, modifiedOutside: false });
         }
       },
 
@@ -432,6 +489,8 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       connect(req) {
         const { graph, phase } = get();
         if (!graph || isReadOnly(get())) return "The graph is read-only";
+        const locked = lockedTargetReason(get(), req.target);
+        if (locked) return locked;
         const error = ops.connectionError(graph, req, phase);
         if (error) return error;
         get().edit((g) => ops.connect(g, req, phase));
@@ -439,7 +498,17 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       },
 
       removeElements(nodeIds, edgeIds) {
-        get().edit((g) => ops.removeElements(g, nodeIds, edgeIds));
+        const s = get();
+        // §8.7: steps that started in the active run, and their inputs, stay.
+        const nodes = nodeIds.filter((id) => !nodeLock(s, id));
+        const edges = s.activeRunId
+          ? edgeIds.filter((id) => {
+              const edge = s.graph?.edges.find((e) => e.id === id);
+              return !edge || isEdgeEditable(edge, s.runLocks);
+            })
+          : edgeIds;
+        if (nodes.length === 0 && edges.length === 0) return;
+        get().edit((g) => ops.removeElements(g, nodes, edges));
       },
 
       removeSelection() {
@@ -454,6 +523,7 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       },
 
       updateSettings(fn) {
+        if (get().activeRunId) return;
         get().edit((g) => {
           const settings = fn(g.settings);
           return settings === g.settings ? g : { ...g, settings };
@@ -462,11 +532,12 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
 
       rename(name) {
         const trimmed = name.trim();
-        if (!trimmed) return;
+        if (!trimmed || get().activeRunId) return;
         get().edit((g) => (g.name === trimmed ? g : { ...g, name: trimmed }), "rename");
       },
 
       setIssues(issues) {
+        if (get().activeRunId) return;
         get().edit((g) => {
           const current = g.issues ?? [];
           if (current.length === issues.length && current.every((i, n) => i.id === issues[n]!.id)) return g;
@@ -508,11 +579,11 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
           return;
         }
         if (res.hash === cur.graphHash) {
-          set({ activeRunId: res.activeRunId });
+          set({ activeRunId: res.activeRunId, runLocks: res.runLocks ?? {} });
           return;
         }
         if (cur.dirty) {
-          set({ externalChange: true, activeRunId: res.activeRunId });
+          set({ externalChange: true, activeRunId: res.activeRunId, runLocks: res.runLocks ?? {} });
           return;
         }
         const previous = cur.graph;
@@ -601,12 +672,40 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       },
 
       setActiveRunId(runId) {
-        if (get().activeRunId !== runId) set({ activeRunId: runId });
+        if (get().activeRunId === runId) return;
+        set(runId ? { activeRunId: runId } : { activeRunId: null, runLocks: {}, runEditError: null });
+        if (runId) get().refreshRunLocks();
+      },
+
+      refreshRunLocks() {
+        if (locksTimer || !graphId || get().discarded) return;
+        locksTimer = setTimeout(() => {
+          locksTimer = null;
+          const s = get();
+          if (!s.graph || s.discarded || !s.activeRunId) return;
+          void persistence
+            .load(graphId)
+            .then((res) => {
+              const cur = get();
+              if (cur.discarded || !cur.graph) return;
+              // Only the locks: a changed file goes through the usual external-change path.
+              set({ activeRunId: res.activeRunId, runLocks: res.runLocks ?? {} });
+              if (res.hash !== cur.graphHash && !cur.dirty && !cur.saving) void get().checkExternalChange();
+            })
+            .catch(() => undefined);
+        }, LOCKS_REFRESH_MS);
+      },
+
+      async discardLocalEdits() {
+        set({ runEditError: null });
+        await get().reloadFromDisk();
       },
 
       discard() {
         const lost = get().dirty || saveTimer !== null;
         clearSaveTimer();
+        if (locksTimer) clearTimeout(locksTimer);
+        locksTimer = null;
         clearHighlightTimer();
         set({ discarded: true });
         return lost;

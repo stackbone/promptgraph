@@ -132,8 +132,11 @@ export function createDispatcher(): Dispatcher {
         for (const view of views) if (view.repoId === msg.repoId) view.run.getState().applyRunUpdate(msg.run);
         const editor = findEditorStore(msg.repoId, msg.run.graphId)?.getState();
         if (editor) {
-          if (!isFinalRunStatus(msg.run.status)) editor.setActiveRunId(msg.run.id);
-          else if (editor.activeRunId === msg.run.id) editor.setActiveRunId(null);
+          if (!isFinalRunStatus(msg.run.status)) {
+            // Nodes start and finish: the locks of the live edits change (§8.7).
+            if (editor.activeRunId === msg.run.id) editor.refreshRunLocks();
+            else editor.setActiveRunId(msg.run.id);
+          } else if (editor.activeRunId === msg.run.id) editor.setActiveRunId(null);
         }
         refreshPendingSoon(msg.repoId);
         return;

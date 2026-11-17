@@ -22,7 +22,8 @@ export function currentChatContext(view: ChatView): ChatContext {
     selectedNodeIds: runMode ? (runs.selectedNodeId ? [runs.selectedNodeId] : []) : editor.selectedNodeIds,
     selectedEdgeIds: runMode ? [] : editor.selectedEdgeIds,
     runId: runs.selectedRunId ?? editor.activeRunId,
-    readOnly: runMode || isReadOnly(editor),
+    // §8.7: the active run is edited live; a run that ended shows a snapshot.
+    readOnly: runMode ? runs.selectedRunId !== editor.activeRunId : isReadOnly(editor),
     ...(graph.issues?.length ? { issues: graph.issues.map((i) => i.identifier) } : {}),
   };
 }
@@ -40,7 +41,7 @@ export async function sendChatMessage(view: ChatView, sessionId: string, text: s
   if (editor.graph && !isReadOnly(editor) && (editor.dirty || editor.externalChange)) {
     const why = editor.externalChange
       ? "the graph changed outside the editor: reload it or keep your changes first."
-      : `your latest graph changes are not saved${editor.saveError ? ` (${editor.saveError})` : ""}.`;
+      : `your latest graph changes are not saved${editor.runEditError ? ` (the active run refused them: ${editor.runEditError})` : editor.saveError ? ` (${editor.saveError})` : ""}.`;
     toast("error", `Message not sent: ${why}`);
     return false;
   }

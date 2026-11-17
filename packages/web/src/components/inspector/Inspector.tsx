@@ -8,6 +8,7 @@ import {
   type GraphNode,
   type LoopSpec,
   type OnError,
+  type RunLockLevel,
   type SourcePort,
   nodeDisplayLabel,
 } from "@promptgraph/shared";
@@ -19,7 +20,7 @@ import { nodeIterations, selectIterationEntry } from "../../lib/run-view";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { useEditor, useRun, useView, useViewUi } from "../../store/view/context";
-import { isReadOnly } from "../../store/view/editor-store";
+import { isGraphLocked, isReadOnly, nodeLock } from "../../store/view/editor-store";
 import { Select } from "../common/fields";
 import { NodeTypeIcon } from "../common/icons";
 import { Button, Checkbox, Field, Section, StatusDot } from "../common/ui";
@@ -47,14 +48,20 @@ function EditInspector() {
   const nodeId = useEditor((s) => s.selectedNodeId);
   const edgeId = useEditor((s) => s.selectedEdgeId);
   const readOnly = useEditor(isReadOnly);
+  const graphLocked = useEditor(isGraphLocked);
+  const lock = useEditor((s) => (nodeId ? nodeLock(s, nodeId) : null));
+  const edgeLocked = useEditor((s) => {
+    const e = edgeId ? s.graph?.edges.find((x) => x.id === edgeId) : undefined;
+    return !!e && nodeLock(s, e.target) !== null;
+  });
   if (!graph) return null;
 
   const node = nodeId ? graph.nodes.find((n) => n.id === nodeId) : undefined;
   const edge = edgeId ? graph.edges.find((e) => e.id === edgeId) : undefined;
   const count = selectedNodeIds.length + selectedEdgeIds.length;
 
-  if (node) return <NodeInspector node={node} disabled={readOnly} />;
-  if (edge) return <EdgeInspector edge={edge} disabled={readOnly} />;
+  if (node) return <NodeInspector node={node} disabled={readOnly} lock={lock} />;
+  if (edge) return <EdgeInspector edge={edge} disabled={readOnly || edgeLocked} />;
   if (count > 1) {
     return (
       <Section title="Selection">
@@ -73,9 +80,10 @@ function EditInspector() {
         <ValidationList validation={validation} />
       </Section>
       <Section title="Graph settings">
-        <GraphNameField key={graph.name} name={graph.name} graphId={graph.id} disabled={readOnly} onRename={(name) => view.editor.getState().rename(name)} />
-        <LinkedIssues issues={graph.issues ?? []} disabled={readOnly} onChange={(issues) => view.editor.getState().setIssues(issues)} />
-        <GraphSettingsForm graphId={graph.id} settings={graph.settings} disabled={readOnly} />
+        {graphLocked && !readOnly && <p className="mb-2 text-[11px] text-muted-foreground">Fixed while a run of this graph is active.</p>}
+        <GraphNameField key={graph.name} name={graph.name} graphId={graph.id} disabled={graphLocked} onRename={(name) => view.editor.getState().rename(name)} />
+        <LinkedIssues issues={graph.issues ?? []} disabled={graphLocked} onChange={(issues) => view.editor.getState().setIssues(issues)} />
+        <GraphSettingsForm graphId={graph.id} settings={graph.settings} disabled={graphLocked} />
       </Section>
     </>
   );
@@ -102,7 +110,9 @@ const ON_ERROR_OPTIONS: readonly { value: OnError; label: string }[] = [
   { value: "fail-run", label: "Fail the whole run" },
 ];
 
-function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean }) {
+/** `lock` (§8.7): "frozen" leaves only the label editable, "config" keeps the node from being deleted. */
+function NodeInspector({ node, disabled, lock }: { node: GraphNode; disabled: boolean; lock: RunLockLevel | null }) {
+  const configDisabled = disabled || lock === "frozen";
   const view = useView();
   const settings = useEditor((s) => s.graph!.settings);
   const phase = useEditor((s) => s.phase);
@@ -121,10 +131,17 @@ function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean 
           <div className="text-sm font-semibold text-foreground">{meta.title}</div>
           <div className="truncate text-[11px] text-muted-foreground">{meta.description}</div>
         </div>
-        <Button size="sm" variant="ghost" disabled={disabled} onClick={() => view.editor.getState().removeElements([node.id], [])}>
+        <Button size="sm" variant="ghost" disabled={disabled || lock !== null} onClick={() => view.editor.getState().removeElements([node.id], [])}>
           Delete
         </Button>
       </div>
+      {lock && (
+        <p className="border-b px-4 py-2 text-[11px] leading-snug text-muted-foreground">
+          {lock === "frozen"
+            ? "This step already ran in the active run: only its label can change."
+            : "This step started in the active run: its configuration is used by the next attempt (Retry)."}
+        </p>
+      )}
       {(nodeIssues.errors.length > 0 || nodeIssues.warnings.length > 0) && (
         <div className="border-b px-2 py-2">
           <ValidationList validation={nodeIssues} />
@@ -135,11 +152,11 @@ function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean 
           <Input value={node.label} disabled={disabled} onChange={(e) => update((n) => ({ ...n, label: e.target.value }))} />
         </Field>
         <Field label="On error" hint={phase === 2 ? "Applies only when no failure edge (error port) handles the failure." : undefined}>
-          <Select value={node.onError ?? "pause"} options={ON_ERROR_OPTIONS} disabled={disabled} onChange={(onError) => update((n) => ({ ...n, onError }))} />
+          <Select value={node.onError ?? "pause"} options={ON_ERROR_OPTIONS} disabled={configDisabled} onChange={(onError) => update((n) => ({ ...n, onError }))} />
         </Field>
       </Section>
       <Section title="Configuration">
-        <NodeConfigForm node={node} settings={settings} disabled={disabled} />
+        <NodeConfigForm node={node} settings={settings} disabled={configDisabled} />
       </Section>
     </div>
   );

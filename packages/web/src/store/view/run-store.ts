@@ -250,6 +250,8 @@ export function createRunStore(repoId: string, deps: RunStoreDeps = repoRunDeps(
         if (s.runInfo[run.id] && (prev?.status !== run.status || prev.cleanedUp !== run.cleanedUp)) void get().loadRunInfo(run.id);
         if (run.id !== s.selectedRunId) return;
         if (!s.detail) buffer.push({ kind: "run", run });
+        // §8.7: a live edit changed the run's graph (and its node runs): refetch the snapshot.
+        else if (run.graphRev > s.detail.run.graphRev) void get().reloadSelected();
         else set({ detail: { ...s.detail, run: { ...s.detail.run, ...run } } });
       },
 

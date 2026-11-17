@@ -19,7 +19,7 @@ const handleBase = "!size-2.5 !border-2 !border-card";
 
 /** Canvas card for every node type: label, type icon, config preview; in run mode status, timing, activity, lane, usage. */
 export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgFlowNode>) {
-  const { node, nodeRun, lane, runMode, issues, phase, mergeInputs, highlighted } = data;
+  const { node, nodeRun, lane, runMode, issues, phase, mergeInputs, highlighted, lock } = data;
   const meta = NODE_TYPE_META[node.type];
   const style = runMode ? nodeRunStyle(nodeRun) : null;
   const hasErrors = !runMode && issues.errors.length > 0;
@@ -52,6 +52,15 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
           <div className="truncate text-[13px] leading-tight font-semibold text-foreground">{node.label?.trim() || <span className="text-muted-foreground italic">{nodeDisplayLabel(node)}</span>}</div>
           <div className="text-[10px] tracking-wide text-muted-foreground uppercase">{meta.title}</div>
         </div>
+        {lock && (
+          <span
+            title={lock === "frozen" ? "Already ran in the active run: only its label and position can change" : "Started in the active run: its config can still change for a retry"}
+            aria-label={lock === "frozen" ? "Locked by the active run" : "Config editable for a retry"}
+            className={`shrink-0 text-sm ${lock === "frozen" ? "text-muted-foreground" : "text-amber-600"}`}
+          >
+            <Icons.lock />
+          </span>
+        )}
         {(hasErrors || hasWarnings) && (
           <Icons.alert className={`shrink-0 text-sm ${hasErrors ? "text-red-600" : "text-amber-600"}`} />
         )}

@@ -1,4 +1,4 @@
-import type { GraphNode, NodeRun } from "@promptgraph/shared";
+import type { GraphNode, NodeRun, RunLockLevel } from "@promptgraph/shared";
 import type { Node } from "@xyflow/react";
 import type { NodeLane } from "../../lib/lanes";
 
@@ -21,6 +21,8 @@ export interface PgNodeData extends Record<string, unknown> {
   phase: 1 | 2;
   /** Changed outside the editor a moment ago (chat, MCP): drawn with a pulsing halo. */
   highlighted?: boolean;
+  /** Edit mode during an active run (§8.7): the node already started (null = still editable). */
+  lock?: RunLockLevel | null;
 }
 
 export type PgFlowNode = Node<PgNodeData, "pg">;
