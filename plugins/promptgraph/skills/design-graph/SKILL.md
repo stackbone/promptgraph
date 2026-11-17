@@ -97,8 +97,13 @@ When the user wants to change a graph that already exists ("remove this node", "
    graph on screen, and "this node", "these steps" or "here" mean the selected nodes. If nothing is
    selected and the request is ambiguous, ask which step they mean. Outside the chat panel, use
    `list_graphs` and ask.
-2. **Read it.** Call `get_graph` and use the real node ids from it. If `activeRunId` is set, the graph
-   is read-only: tell the user and stop.
+2. **Read it.** Call `get_graph` and use the real node ids from it. If `activeRunId` is set, a run of
+   the graph is active and your edit changes that run live. Only steps that have not started can
+   change: `runLocks` lists the ones that did (`frozen`: leave them alone except label and position;
+   `config`: its config may change before the user retries it). Do not remove them, rewire their
+   inputs, or change the graph settings. You can connect new steps after a finished or running step:
+   a step added after a finished one starts right away, so tell the user. If `patch_graph` refuses
+   the edit, explain the reason it gives in one line and offer the closest change that is allowed.
 3. **Make the smallest change that does what was asked.** Do not rename, reorder or reposition nodes
    that the request does not involve. Leave out `position` for new nodes; promptgraph places them
    next to their neighbours.

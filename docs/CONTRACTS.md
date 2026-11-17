@@ -227,7 +227,8 @@ README.md              prerequisites, the pinned Tauri version, commands, enviro
 | `urls.ts` | `webRoutes` (`home`, `repo`, `graph`, `run`, `nodeRun`, `report`; every segment `encodeURIComponent`'d, DESIGN §13.2), `normalizePath` (tab dedupe key: trailing slashes stripped except `/`, each segment re-encoded as `encodeURIComponent(decodeURIComponent(seg))`, undecodable segments kept, query/fragment kept), `LOGIN_PATH`, `isSafeNextPath` (exactly one leading `/`, no `\`, no control characters or whitespace, no scheme), `safeRedirectTarget(next, origin)` (isSafeNextPath and `new URL(next, origin)` keeps the origin with no username/password and the resolved path + query + fragment, dot segments removed, passes isSafeNextPath again (so `/..//evil.com` cannot become `//evil.com`) → that resolved path, else `/`), `loginUrl(origin, code, next)` |
 | `desktop.ts` | `OPEN_URL_RESULT_VERSION` (1), `OpenUrlResultSchema` (`{v: 1, cliVersion, url, port, repoId \| null}`), `DESKTOP_COMMANDS` (`relogin`), `DESKTOP_OPEN_ARGS`, `DESKTOP_PERMISSIONS`, `DESKTOP_STRIPPED_ENV`, `DESKTOP_STRIPPED_ENV_PREFIXES`, `DESKTOP_MOUNT_PATH_LISTS` (`PATH`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`, `PYTHONHOME`, `PYTHONPATH`, `PERLLIB`, `QT_PLUGIN_PATH`, `GST_PLUGIN_SYSTEM_PATH`, `GST_PLUGIN_SYSTEM_PATH_1_0`: their AppImage-mount entries are removed) (DESIGN §20); distribution (§20.6–§20.9): `VERSION_MISMATCH_POLICIES` (`auto`, `restart`, `attach`), `EXIT_VERSION_MISMATCH` (4), `OpenMismatchResultSchema` (`{v: 1, mismatch: {serverVersion, cliVersion, runningRuns: int ≥ 0 \| null, daemonIsOlder: boolean}}`), `RuntimeManifestSchema` (`{v: 1, version, nodeVersion, platform: "linux-x64", buildId: 64 hex}`), `SHIM_MARKER` (`# promptgraph-desktop shim v1`), `ShimStatusSchema` (`{path, state: absent\|ours\|foreign, foreignTarget: string \| null, decision: accepted\|declined\|null, onPath: boolean \| null, shadowedBy: string \| null, pathHint: string \| null, warn: boolean}`; onPath/shadowedBy/pathHint are null unless a PATH check ran; `warn` = a check ran, it was not OK, and this version has not warned yet (the CLI records `warnedVersion` when it returns true)), `DesktopInstallResultSchema` (`{v: 1, version, root /* the versioned dir */, cliPath /* <root>/bin/promptgraph */, current: string \| null /* the name current points at after the call */, installed, pruned: string[], shim: ShimStatus}`), `ShimResultSchema` (`{v: 1, shim: ShimStatus, backup: string \| null}`), `DesktopPrefsSchema` (`{v: 1, shim?: {decision, decidedAt, pathOk?: boolean, warnedVersion?: string}}`, looseObject so unknown keys survive), `DESKTOP_DIALOGS` (`{id: keys[]}`: `shim-offer` [install, skip], `shim-replace` [keep, replace], `path-warning` [ok], `shim-failed` [ok], `version-mismatch` [restart, keep, use], `update` [update, later], `update-failed` [ok], `restart-failed` [ok]; the contract test checks the Rust strings against it), `DESKTOP_INSTALL_ARGS` (`["desktop", "install", "--json"]`), `compareVersions(a, b)` (numeric major.minor.patch; a pre-release sorts before its release; used by `open`, the MCP mismatch text and the tests), `DAEMON_RESTART_PROGRESS_PREFIX` (`promptgraph: restarting the daemon`); `DESKTOP_STRIPPED_ENV` gains `PG_DESKTOP_AUTO_ANSWER`, `PG_DESKTOP_UPDATES` and `DESKTOP_STRIPPED_ENV_PREFIXES` gains `GI_` (the contract test checks the Rust lists against them) |
 | `mcp-guide.ts` | `MCP_SKILLS`, `MCP_TOOL_GROUPS`, `MCP_TOOL_NAMES`, `ClaudeSetupResponseSchema`, `ClaudeCheckResponseSchema` (setup wizard content, DESIGN §19.5) |
-| `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
+| `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan(graph, {previous?, prefer?, reserved?})` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
+| `run-edit.ts` | Live edits (DESIGN §8.7), pure: `runEditLocks(nodeRuns) → RunLocks`, `isEdgeEditable`, `diffRunGraph`, `checkRunEdit(before, after, nodeRuns) → RunEditProblem[]`, `planRunLanes`, `lanePlanToJson` / `lanePlanFromJson`, `RUN_EDIT_REFUSED_CODE`, `RUN_BUSY_CODE` |
 | `layout.ts` | `LAYOUT_DX`/`LAYOUT_DY`, `layeredLayout(graph)` (top to bottom, §19.3), `isLaidOut(graph)` (every node already where layeredLayout puts it, ±0.5 px; the Arrange button is disabled then), `deriveEdgeId`, `edgeIdSet` |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
 
@@ -311,6 +312,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `git/exec.ts` | `git`, `gitOk`, `GitError`, `GitOptions.readOnly` → `READ_ONLY_GIT_CONFIG` (`-c core.fsmonitor=false`) for read-only calls: branch listing, `symbolic-ref`, status, lane diffs (incl. their throwaway index), `for-each-ref`, `worktree prune` (DESIGN §14) |
 | `git/repo.ts` | `resolveRepoRoot`, `resolveMainWorktree(dir)` (parent of `--git-common-dir`; not `.git` → throws), `currentBranch`, `listBranches`, `revParse`, `isDirty` |
 | `git/merge-state.ts` | `gitPath`, `hasMergeHead`, `hasPendingSquash`, `unmergedFiles`, `mergeInProgress` |
+| `git/log.ts` | `readGitState(repoPath)` → `GitStateResponse` (HEAD with `upstream` {name, ahead, behind, gone}, status counts, signature), pure `parseUpstream`, `readGitLog(repoPath, limit = 500)` → `GitLogResponse` (DESIGN §13.7; read-only calls, no `refs/promptgraph/*`), pure `parseGitLog`, `parseDecoration`, `parseStatus` |
 | `pty/ring-buffer.ts` | `RingBuffer`, `PTY_RING_BYTES` (2 MB) |
 | `pty/pty-manager.ts` | `PtyManager` (+ `listOwnedBy(owner)`, `killOwnedBy(owner)` — `killAll`'s SIGTERM then SIGKILL-straggler logic for one owner, `owned(owner): OwnedPtys`), `OwnedPtys {owner, spawn, get, list, killOwned}` (stamps `SpawnPtyOptions.owner` on every spawn: node, `setup-`, `shell-`, `reopen-`; `get`/`list` see only the owner's PTYs; viewers — attach, input, resize — stay on the PtyManager), `PtyHandle`, `SpawnPtyOptions` (`owner?`), `PtyAttachResult`, `logSizePath` |
 | `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` |
@@ -351,7 +353,8 @@ Semantics fixed here (do not re-implement elsewhere):
 | `daemon/context.ts` | `DaemonContext {paths, env, store, bus, settings, ptys, hooks, pgHookPath, notifier, port, startedAt, hookSecret, getToken(), setToken(t), prereqWarnings(), legacyLocks, registry, loginCodes, sessions, claudeAuth, usageLimits}`, `createDaemonContext({token, warnings?, env?, authStatusRunner?})` (home 0700, `state.db` 0600, opens and migrates the DB, deletes expired sessions, `syncTokenFingerprint`; touches no repository; `prereqWarnings()` = the given warnings, else `checkPrereqs(env)` errors + warnings, computed once on first use), `rotateToken(ctx)` (new 32-byte token → `writeToken` → `setToken` → `loginCodes.clear()` → `sessions.revokeAll()` → `meta.token_fingerprint` → bus `token:rotated`), `TOKEN_FINGERPRINT_KEY` (`token_fingerprint`), `tokenFingerprint(token)` (SHA-256 hex of `promptgraph-token-fingerprint:` + token), `syncTokenFingerprint(store, sessions, token) → number` (fingerprint ≠ `meta.token_fingerprint`, or none recorded → `sessions.revokeAll()`, then records it; returns the sessions deleted), `resolvePtyLogPath` |
 | `daemon/login-codes.ts` | `LoginCodes(now?) {mint(now?, {desktop?}): {code, expiresAt}, redeem(code, now?): LoginCodeGrant {desktop} \| null, clear(), size}` (32 random bytes base64url, TTL `LOGIN_CODE_TTL_MS`, single use: `redeem` deletes the code whatever the outcome; memory only; expired codes pruned on mint, at most 256 outstanding) |
 | `daemon/sessions.ts` | `Sessions(store, bus, now?) {create(label, now?): cookie value, verify(value, now?): SessionRow \| null, list(currentHash?, now?): SessionSummary[], revoke(id): number, revokeAll(), deleteExpired(now?), startSweep(intervalMs?): stop}` (value = 32 random bytes base64url, only `sessionHash(value)` = SHA-256 hex stored; `verify`: not 43 base64url chars → null, expired → deleted + `session:revoked`, used ≥ `SESSION_TOUCH_INTERVAL_MS` (1 h) after `last_seen_at` → `touchSession(now, now + SESSION_IDLE_MS)`; `revoke`: parsed with `SessionIdPrefixSchema` (`all` or an 8–64 hex prefix, case-insensitive; every match), else `InvalidSessionIdError`; `startSweep`: unref'd `deleteExpired` every `SESSION_TOUCH_INTERVAL_MS` by default, started and stopped by `startDaemon`; emits `session:revoked {idHashes}` when any was deleted), `sessionHash`, `sessionLabel(userAgent, desktop?)` (`promptgraph desktop` for the flag or a `Tauri` UA, `Firefox`, `Chrome`, else `Browser`), `SESSION_TOUCH_INTERVAL_MS`, `InvalidSessionIdError` |
-| `daemon/usage-limits.ts` | `mergeUsageLimits(previous, info, now)` (reported windows replace, others kept until `resetsAt`; epoch s → ms; null when nothing usable), `UsageLimitsTracker(store, bus, now?)`: `current()`, `observe(info)` (→ `meta.usage_limits`, bus `usage:limits`); loaded from `meta` on start (DESIGN §23.3) |
+| `daemon/usage-limits.ts` | `mergeUsageLimits(previous, info, now)` (reported windows replace, others kept until `resetsAt`; epoch s → ms; null when nothing usable), `UsageLimitsTracker(store, bus, now?)`: `current()`, `observe(info)`, `observeSnapshot(windows)` (replaces every window, keeps the overage) (→ `meta.usage_limits`, bus `usage:limits`); loaded from `meta` on start (DESIGN §23.3) |
+| `daemon/usage-probe.ts` | `runUsageCommand(env, cwd)` (`claude -p /usage --output-format json`, bare flags `USAGE_PROBE_ARGS`; resolves the envelope's `result`), `parseUsageText(text, now)` (window name → `UsageWindow`, null without usage lines), `parseResetTime(text, now)`, `UsageProbe(env, tracker, {run?, cwd, now?})`: `refresh({auto?})` (shared in-flight probe; skipped within 30 s, `auto` 2 min; failures → `lastError`), started at daemon start and on `node:update` (DESIGN §23.3) |
 | `daemon/repo-context.ts` | `RepoContext {repo: RepoRef, graphs, lanes, claude, runners, engine, ptys: OwnedPtys, watchError, activate(), dispose()}`, `createRepoContext(daemon, row)`: no side effects (its own `ClaudeRunner` over `daemon.ptys.owned(repo.id)`, endpoint `{port getter, hookSecret}`; the PTY input listener); `activate` (idempotent) = `graphs.ensureDir()` + `graphs.watch({onError})` once (a watcher failure sets `watchError` and emits `repo:changed`, it never fails the activation) + `engine.prune()` once; `dispose` (memoised) = off user input + stop watcher + `engine.shutdown()` + `engine.drain()` |
 | `daemon/registry.ts` | `RepoRegistry(deps {store, bus, paths, env, legacyLocks, createContext, now?})`: `list()`, `summary(id)` (`error` = load/activation failure, else the watcher's), `row(id)`, `add(path)` (503 `daemon_stopping` once `shutdownAll` started; `~`/`~/` → HOME; not absolute → `HttpError` 422 `path_not_absolute`; `resolveRepoRoot` + realpath, failure → 422 `not_a_git_repo`; at or under `paths.worktreesDir` (`isInWorktreesDir`) → 422 `lane_worktree`; waits for a pending removal; inserts or touches; `legacyLocks.hold` (live pre-M7 holder → 409 `legacy_server_running`, a new row is deleted again); emits `repo:changed`; activates, an activation failure stays in the returned summary), `load(id)` (waits for a removal, re-checked after each wait; 503 `daemon_stopping`; 404 `unknown_repo`; 409 `repo_unavailable` when the directory is gone; memoised, cleared on failure), `activate(id)` (memoised: `legacyLocks.hold` + `ctx.activate()`; failure → summary `error`, memo cleared, thrown as 500 `activation_failed`; a context whose removal started while it loaded is never activated: waits for the removal and starts over, 404 once gone), `remove(id, {force})` (404; 409 `repo_active` with a `running` run unless `force`; `disposing` promise: dispose → delete row → release legacy lock → `repo:removed`), `backfill()` (DESIGN §4.4; lane worktrees skipped; git checks first, then one `store.transaction` with `rewriteRepoPath`, inserts and `meta.repos_backfilled = 1`; no-op once set), `shutdownAll()` (sets `closing`: later `load`/`activate`/`add` → 503 `daemon_stopping`; every context disposed concurrently); `REPOS_BACKFILLED_KEY` |
 | `daemon/start.ts` | `startDaemon({port?, env?, warnings?, token?}) → RunningDaemon {ctx, port, origin, close()}` in the order of DESIGN §4.1 item 1 (lock → `DaemonLockedError {heldBy}`; live legacy record → `LegacyServerRunningError`, stale ones deleted; `token` given = in memory only, tests; listen: explicit port → `PortInUseError` (`code` EADDRINUSE, `Port <p> is already in use`), else `portCandidates(sticky, env)` = sticky → `PG_PORT_DEFAULT`/4777 → 0; `markInterrupted(store, {})`; `registry.backfill()`; legacy lock per registered row (failure logged); notifier; `WsHub`; `port` file; `daemon.json` with `pidStart`). `close()` (idempotent): `registry.shutdownAll()` → `ptys.killAll()` → record removed → legacy locks released → notifier, hub, HTTP, DB closed → lock released. `installProcessHandlers(daemon)` (CLI only: `unhandledRejection` logged; `uncaughtException` → `close()` → exit 1), `HOST`, `DEFAULT_PORT` |
@@ -368,6 +371,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `http/routes/fs.ts` | `registerFsRoutes`: `GET /api/fs/dirs?path=&hidden=1` → `listDirs` |
 | `http/routes/linear.ts` | `registerLinearRoutes`: `GET /api/linear`, `PUT/DELETE /api/linear/key`, `GET /api/linear/issues?q=&states=`, `GET /api/linear/issue-states?ids=` → `daemon.linear`; `LinearNotConnectedError` → 409 `linear_not_connected`, `LinearApiError` unauthorized → 422 (PUT) / 502 `linear_key_invalid`, unavailable → 502 `linear_unavailable` (DESIGN §24) |
 | `daemon/dir-browser.ts` | `homeDir(env)` (HOME, else `os.homedir()`), `expandHome(input, home)` (`~`, `~/…`; shared with `registry.add`), `listDirs(path?, {env, hidden?})` (default home; not absolute → 422 `path_not_absolute`; `readdir` EACCES/EPERM → 403 `permission_denied`, other failure → 404 `not_a_directory`; directories and symlinks to directories, dot-names only with `hidden`, sorted case-insensitively and numerically; `isGitRepo` = `lstat(<dir>/.git)` succeeds; `parent` null at `/`) |
+| `http/routes/git.ts` | `registerGitRoutes`: `GET /api/repos/:repoId/git/log?limit=` (`GitLogQuerySchema`) → `readGitLog`, `GET …/git/state` → `readGitState` (DESIGN §13.7) |
 | `http/routes/{graphs,runs,node-runs,hooks}.ts`, `misc.ts` | `register*Routes(app, daemon?)`; repository routes take their context from `repoOf(c)`; `misc.ts`: `registerSettingsRoutes` (global) and `registerRepoMiscRoutes` (commands, claude-setup, claude-setup/check, claude-auth) |
 | `http/static.ts` | `registerStatic` (reserved: `/api`, `/hooks`, `/ws`, `/login`; `index.html` with `Cache-Control: no-store`) |
 | `ws/hub.ts` | `WsHub(daemon) {attach, close}` (each client keeps its session hash; `session:revoked` / `token:rotated` → `close(4401)`, then `terminate` after `SIGN_OUT_TERMINATE_MS`), `REPO_STATUS_DEBOUNCE_MS` (250) |
@@ -431,9 +435,25 @@ The engine emits `attention` exactly once per transition **into** one of the thr
 Public API (all async except `getRun`, `activeRunForGraph`, `handleUserInput`):
 `startRun(graphId) → RunDetail`, `getRun(runId)`, `cancelRun`, `cleanupRun`, `activeRunForGraph(graphId)`,
 `done`, `fail(id, reason?)`, `retry`, `skip`, `setHold(id, hold)`, `submitApproval(id, ApprovalRequest)`,
-`getApprovalInfo`, `getDiff`, `reopenSession`, `handleUserInput(ptyId)`, `recover()`, `shutdown()`.
+`getApprovalInfo`, `getDiff`, `reopenSession`, `handleUserInput(ptyId)`, `recover()`, `shutdown()`, and for live
+edits (DESIGN §8.7) `editRun(runId, graph)` (sync), `whenEditable(graphId)`, `getRunLocks(runId) → RunLocks`.
 Errors are `EngineError(code)`: `not_found`→404, `validation_failed`→422 (details = ValidationResult),
-`run_active`→409, `invalid_state`→409, `load_error`→422.
+`run_active`→409, `invalid_state`→409, `load_error`→422, `run_edit_refused`→409 (details = RunEditProblem[]),
+`run_busy`→409.
+
+**editRun** (DESIGN §8.7; the GraphStore write guard calls it for every save of a graph with an active run)
+1. Refuse while terminating or while `inflight > 0` (`run_busy`; the PUT route first awaits `whenEditable`, ≤10 s).
+2. `checkRunEdit(snapshot, next, nodeRuns)` (shared `run-edit.ts`), then `validateGraph`, then
+   `planRunLanes({graph, previous: live.plan, nodeRuns, createdLaneIds})`; any problem → `run_edit_refused`.
+3. One transaction: delete the node runs of removed nodes, insert a `pending` node run per added node, move pending
+   node runs to their new lane, put `ready` ones whose lane or definition changed back to `pending`;
+   `store.updateRunGraph(snapshot, lanePlanJson)` (`graph_rev` + 1); a `run.edited` event unless only positions or
+   labels changed.
+4. Rebuild the tracker (`restoreTracker`: replay of the finished node runs, as `ensureLive`), swap `graph`, `nodes`,
+   `topo`, `plan`, `tracker`, `loopNodes` of the LiveRun; `ready` nodes the new tracker does not release go back to
+   `pending`; restored dead-path skips are persisted; `resumeReady` unless the run is paused; `checkProgress`.
+5. `ensureLive` uses `store.getLanePlan` when present. `ensureLane` creates a planned lane with `fromSnapshot`
+   through `LaneManager.createLaneFromSnapshot` (branch at the snapshot's parent, `read-tree -u --reset`, checkpoint).
 
 **startRun**
 1. `graphs.get(id)` (GraphLoadError → `load_error`); `validateGraph(graph, {phase})` errors → `validation_failed`.
@@ -502,8 +522,9 @@ uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `
 (assert on every status write).
 
 **Implementation notes (server-core, minimal extensions):**
-- `GraphStore.setWriteGuard(fn)`: called before `save`/`delete`; the `Engine` constructor installs a guard that
-  throws `EngineError("run_active")` (→ 409) while the graph has a running/paused run, so routes need no extra check.
+- `GraphStore.setWriteGuard(fn(graphId, next | null))`: called before `save` (`next` = the parsed graph) and `delete`
+  (`null`); the `Engine` constructor installs a guard that, while the graph has a running/paused run, applies a save
+  to the run (`editRun`, DESIGN §8.7) and refuses a delete with `EngineError("run_active")` (→ 409).
 - `Store` takes an optional clock (`new Store(db, now?)`) and adds `getLane(runId, laneId)`.
   `RunSummary.waitingInput` counts `waiting_input` **and** `idle` node runs; usage sums every attempt.
 - `EngineDeps` adds optional `env` (base env for workspace setup, default `process.env`) and `stopTimeoutMs`
@@ -875,6 +896,7 @@ Daemon routes:
 | GET `/api/daemon/hello?nonce=` | — (public) | `DaemonHelloResponse` (`proof` = `helloProof(token, nonce)`) |
 | GET `/api/daemon` | — | `DaemonInfoResponse` (warnings = `prereqWarnings()`) |
 | GET `/api/daemon/usage-limits` | — | `UsageLimitsResponse` (`usageLimits.current()`, DESIGN §23.3) |
+| POST `/api/daemon/usage-limits/refresh` | — | `UsageLimitsResponse` after `usageProbe.refresh()` (DESIGN §23.3) |
 | GET `/api/repos` | — | `ListReposResponse` |
 | POST `/api/repos` | `AddRepoRequest` (absolute or `~/`) | `RepoSummary` (registers, idempotent, activates) |
 | GET `/api/fs/dirs?path=&hidden=1` | `ListDirsQuery` | `ListDirsResponse` (folder picker; 422 / 404 / 403) |
@@ -1027,13 +1049,31 @@ store/tabs-store.ts              createTabsStore({session, local, initialPath?})
                                  replace} | null}; actions open(path, {activate, dedupe = true}) → id, close, activate, navigate(id,
                                  path, {replace?}), applyHistory(id, path), next(±1), goto(index | "last"), reopenClosed, setTitle,
                                  move, setChats(id, chats | null) (chats survive navigation within their repository only;
-                                 DESIGN §21.11); runTabAction("toggleChat") → emitChatShortcut()
+                                 DESIGN §21.11); runTabAction("toggleChat") → emitChatShortcut(), ("toggleGitGraph") → emitGitGraphShortcut()
 store/chat-dock.ts               pure TabChats transitions (DESIGN §21.11): openChat(chats, repoId, id), toggleChat, minimizeChats,
                                  closeChat (null when empty), dropDeleted(chats, exists), shortcutTarget → minimize | open | new
 store/chat-store.ts              createChatStore / getChatStore per repository: sessions, views (one per opened session),
                                  openSession(id) (detail once), newSession, deleteSession, send, interrupt, answerPermission,
                                  resync (every opened view), applyServerMessage; no shown-session state (tabs own that)
-lib/chat-shortcut.ts             onChatShortcut(listener) / emitChatShortcut(): the active tab's ChatDock listens
+lib/chat-shortcut.ts             onChatShortcut(listener) / emitChatShortcut(): the active tab's ChatDock listens;
+                                 onGitGraphShortcut / emitGitGraphShortcut (Ctrl+Shift+G): the active tab's GitGraphDock listens
+lib/git-graph/layout.ts          layoutGraph(commits {hash, parents, dashed?}[], {mainline?}) → {rows: {column, colour, edges
+                                 {kind through|in|out, from, to, colour, dashed}[], width}[], width}: pure lane layout (DESIGN §13.7)
+lib/git-log.ts                   buildGitGraph(GitLogResponse) → {items (commit {commit, isHead} | worktree), layout} (mainline = the
+                                 uncommitted row or HEAD), branchName(head), hasWorktreeChanges
+components/git/GitGraphDock.tsx  GitGraphDock (in RepoView, before ChatDock): icon toggle portalled into TabContext.bottomBar
+                                 (order-1: after the chat toolbar, before approvals and settings), open state per browser
+                                 (pg.gitGraph.open), GitGraphPanel portalled into TabContext.sidePanel (inline without a tab)
+components/git/GitGraphPanel.tsx GitGraphPanel({active?, onClose}): api.gitLog(limit), polls api.gitState() every 4 s while active
+                                 and re-reads on a new signature, pages of 500 near the end, selection by hash, checkout chip
+                                 (branch, hash, ahead/behind; reveals HEAD) with copy, commit details;
+                                 GIT_GRAPH_SIZE
+components/git/CommitList.tsx    CommitList({model, status, selected, onSelect, onNearEnd, headName, revealHead?}): virtualised
+                                 listbox (28 px rows, overscan 12), ↑/↓/Esc, HEAD row highlight, jump-to-HEAD pill; HeadBadge, RefBadge
+components/git/CopyButton.tsx    CopyButton({text, label, className?}): clipboard copy with a short "Copied" check
+components/git/GraphCell.tsx     GraphCell({row, columns, colours, node}): one row's SVG (ROW_HEIGHT, LANE_WIDTH)
+components/common/side-panel-resize.tsx  SidePanelResizeHandle({size, width, onResize, label}), useSidePanelWidth(size): the left
+                                 edge of a docked side panel (chat, Git graph), width remembered per browser under size.key
 components/chat/ChatDock.tsx     ChatDock (in RepoView, inside the view): bar items portalled into TabContext.bottomBar (inline
                                  without a tab), the open ChatWindow, Ctrl+J while its tab is active, drops deleted sessions
 components/chat/ChatPanel.tsx    ChatWindow({sessionId, actions {onMinimize, onClose, expanded, onToggleExpanded}}) (floating;
@@ -1084,8 +1124,9 @@ components/tabs/TabViews.tsx     one `[data-tab-view=<id>]` per mounted tab (pla
                                  openInNewTab → tabs.open) and TabContext; pinned = the reported editor is dirty or saving; the view
                                  renders (except Home) in `[data-pg-panel]` (inset panel) above `[data-pg-bottom-bar]` (the tab's bottom bar:
                                  a start slot, ClaudeStatus = BillingBadge + ClaudeSetupButton, and an end slot, ChatDock)
-components/tabs/strip-slot.ts    useStripSlot {el, setEl}: the end of the tab strip where the active view portals StripApprovals
-                                 (PendingApprovals of its repository); SettingsMenu({repoPath?}) follows it, open state in
+components/header/BottomBarActions.tsx  BottomBarActions (in RepoView): PendingApprovals (side top, order-2) and, in the active
+                                 tab only, SettingsMenu({repoPath, side: "top"}) (order-3) portalled into TabContext.bottomBar;
+                                 TabStrip keeps SettingsMenu only while the active tab shows Home; open state in
                                  useSettingsMenu (global, not per view)
 components/tabs/tab-context.tsx  TabContext {tabId, active, setTitle, close, reportEditor, chats, setChats, bottomBar, bottomBarStart};
                                  useTabContext()
@@ -1148,7 +1189,7 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
   links. Canvas run mode: a node click `showNodeRun` + `navigate(nodeRun route, {replace})`; a node without a node run
   or a pane click selects/deselects and replaces with the run route. Leaving run mode (Nodes tab) navigates to the graph.
   `startRun` shows the detail (`showRun`) and navigates to the run. Opening a graph with an active run stays on the
-  graph (read-only, banner "View live run"). `useAutoOpenReport(route)` navigates to the report only in the active view
+  graph (editable for the steps that have not started, banner "View live run", DESIGN §8.7). `useAutoOpenReport(route)` navigates to the report only in the active view
   and only from the run's own run/nodeRun route.
 - Stores: no singletons. Editor stores are shared per `(repoId, graphId)`; the last `release` flushes the pending save
   before disposing (re-acquired meanwhile → kept); `discard()` stops saving (graph deleted, repo removed). Run and UI
@@ -1202,7 +1243,9 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
 
 **Implementation notes (web, minimal extensions):**
 - Stores extend the contract interfaces: `EditorStore extends EditorState` adds `repoId`, `graphId` (fixed per store),
-  `phase`/`supportedNodeTypes`, `loading`, `loadError`, `notFound`, `saveError`, `activeRunId` (graph read-only while set),
+  `phase`/`supportedNodeTypes`, `loading`, `loadError`, `notFound`, `saveError`, `activeRunId` (a run is active: saves are live edits, DESIGN §8.7), `runLocks` (lock level per started
+  node; `nodeLock`, `isGraphLocked` for name/settings/issues), `runEditError` (the run refused the last save; the edit
+  stays dirty until fixed or `discardLocalEdits`), `refreshRunLocks` (debounced, on `run:update` of the active run),
   `externalChange` (file changed on disk while dirty), `discarded`, multi-selection `selectedNodeIds/selectedEdgeIds`
   (`selectedNodeId/EdgeId` only when exactly one element is selected) and actions; `RunStore extends RunState` adds
   `graphId`, `detailError`, `detailNotFound`, `selectedNodeId` (run-canvas inspection); `UiStore extends UiState` adds
@@ -1307,6 +1350,8 @@ Executable Node script; use with `PG_CLAUDE_BIN=<path>` (see `test/helpers.ts: F
   duration_ms, structured_output?}`. With `--json-schema`, `structured_output` is synthesised from the schema
   (strings `"fake <prop>"`, booleans `true` — `false` if the prompt contains `[[judge:false]]`, numbers 0) or taken
   from `FAKE_CLAUDE_STRUCTURED` (JSON); `result` is its JSON string. `[[fail]]` → `is_error:true`, exit 1.
+- `-p /usage` (positional, DESIGN §23.3): answered before anything is logged, with a `result` envelope whose text is
+  `FAKE_CLAUDE_USAGE_TEXT` (default: a line without usage windows).
 - `FAKE_CLAUDE_DELAY_MS` (default 50) per-turn latency; `FAKE_CLAUDE_LOG=<file>` appends one JSON line per
   invocation `{argv, cwd, pid, env: PG_*/CLAUDE*/HERMETIC/TERM}` (assert stripping and args).
 - Headless only: `FAKE_CLAUDE_PROMPT_LOG=<file>` appends `{argv, cwd, prompt}` per call (assert judge/message
