@@ -417,7 +417,7 @@ function RowTooltip({ hint, children }: { hint: string; children: ReactNode }) {
  * Header counter of approvals waiting across all runs of the repo. Each entry links to its node run (DESIGN
  * §13.2) and, on a plain click, opens the approval dialog there.
  */
-export function PendingApprovals() {
+export function PendingApprovals({ side = "bottom" }: { side?: "top" | "bottom" } = {}) {
   const view = useView();
   const pending = useRepo((s) => s.pending);
   const runs = useRepo((s) => s.pendingRuns);
@@ -439,7 +439,7 @@ export function PendingApprovals() {
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="end" className="w-80">
+      <DropdownMenuContent side={side} align="end" className="w-80">
         {count === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">No approvals pending.</p>}
         {pending.map((nr) => {
           const info = runs[nr.runId];

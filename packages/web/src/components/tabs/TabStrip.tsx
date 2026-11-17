@@ -5,9 +5,7 @@ import { HOME_PATH, activeTab, stripTabs, tabsStore, useTabs, type Tab } from ".
 import { Icons } from "../common/icons";
 import { Logo } from "../common/Logo";
 import { parseRoute } from "../../lib/router/routes";
-import { useDaemonStore } from "../../store/daemon-store";
 import { SettingsMenu } from "../settings/SettingsMenu";
-import { useStripSlot } from "./strip-slot";
 import { useLoadTabRepos, useTabAttention, useTabTitle } from "./use-tab-title";
 
 /**
@@ -89,7 +87,6 @@ export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBrid
       </div>
       <div className="min-w-6 flex-1" data-pg-tabstrip-spacer="" {...dragRegion} />
       {/* Pending approvals of the active repository tab (portalled by its view), then the app settings. */}
-      <div ref={useStripSlot((s) => s.setEl)} className="flex shrink-0 items-center" data-pg-tabstrip-actions="" />
       <ActiveSettingsMenu />
       {titleBar && <WindowFrame bridge={bridge} />}
       <DocumentTitle bridge={bridge} />
@@ -478,14 +475,14 @@ function ResizeEdges({ bridge }: { bridge: DesktopBridge }) {
 }
 
 /** The settings menu, told the repository of the active tab (none on Home). */
+/** The settings menu while the active tab shows no repository (Home); a repository's view has it in its bottom bar. */
 function ActiveSettingsMenu() {
   const path = useTabs((s) => activeTab(s).path);
   const route = parseRoute(path);
-  const repoId = route.kind === "home" || route.kind === "notFound" ? null : route.repoId;
-  const repoPath = useDaemonStore((s) => (repoId ? (s.repos?.find((r) => r.id === repoId)?.path ?? null) : null));
+  if (route.kind !== "home" && route.kind !== "notFound") return null;
   return (
     <div className="flex shrink-0 items-center pr-1">
-      <SettingsMenu repoPath={repoPath} />
+      <SettingsMenu />
     </div>
   );
 }

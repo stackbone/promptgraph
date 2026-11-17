@@ -35,7 +35,7 @@ export const useSettingsMenu = create<{ open: boolean; setOpen(open: boolean): v
  * trigger, Escape and outside-click dismissal come from Radix. The info text is static content, so it is not
  * focusable. `repoPath`: the repository of the active tab, shown with the version (none on Home).
  */
-export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) {
+export function SettingsMenu({ repoPath = null, side = "bottom" }: { repoPath?: string | null; side?: "top" | "bottom" }) {
   const open = useSettingsMenu((s) => s.open);
   const settings = useDaemonStore((s) => s.settings);
   const daemon = useDaemonStore((s) => s.info);
@@ -71,7 +71,7 @@ export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) 
           </TooltipTrigger>
           <TooltipContent>Settings</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="w-72 p-2">
+        <DropdownMenuContent side={side} align="end" className="w-72 p-2">
           <DropdownMenuLabel className="text-[11px] font-semibold tracking-wider uppercase">Settings</DropdownMenuLabel>
           <DropdownMenuLabel className="pt-0 pb-1 text-xs font-normal text-muted-foreground">Theme</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={theme} onValueChange={(v) => setTheme(v as Theme)}>

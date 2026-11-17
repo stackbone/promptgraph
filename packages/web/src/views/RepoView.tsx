@@ -5,7 +5,7 @@ import { repoApi } from "../api/rest";
 import { wsClient } from "../api/ws";
 import { ChatDock } from "../components/chat/ChatDock";
 import { ClaudeStatus } from "../components/claude/ClaudeStatus";
-import { StripApprovals } from "../components/header/StripApprovals";
+import { BottomBarActions } from "../components/header/BottomBarActions";
 import { useTabContext } from "../components/tabs/tab-context";
 import { graphKey } from "../store/tabs-store";
 import { useLocation } from "../lib/router/location";
@@ -187,7 +187,7 @@ function RouteViews({ route, own, active }: { route: RepoRoute; own: OwnStores; 
   return (
     <ViewProvider value={stores}>
       {content}
-      <StripApprovals />
+      <BottomBarActions />
       <ClaudeStatus />
       <ChatDock />
     </ViewProvider>
