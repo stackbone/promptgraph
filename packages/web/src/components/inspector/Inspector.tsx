@@ -1,6 +1,5 @@
 import {
   edgeWhen,
-  costLabel,
   isFinalRunStatus,
   type EdgeWhen,
   type GraphEdge,
@@ -30,7 +29,7 @@ import { LinearIssuePicker } from "../common/LinearIssuePicker";
 import { LaneLegend } from "./LaneLegend";
 import { NodeConfigForm } from "./NodeConfigForm";
 import { NodeRunDetails, UsageSection } from "./NodeRunDetails";
-import { RunBrief } from "./RunBrief";
+import { RunBrief, RunStatusBrief } from "./RunBrief";
 import { ValidationList } from "./ValidationList";
 
 /** Right panel: node/edge/graph config in edit mode; NodeRun details and controls in run mode. */
@@ -333,9 +332,10 @@ function RunOverview() {
         )}
         <p className="text-xs text-muted-foreground">Click a node to see its details and open its terminal.</p>
       </Section>
+      <RunStatusBrief />
+      <UsageSection usage={run.usage} billingMode={run.billingMode} />
       <RunBrief />
       <LaneLegend />
-      <UsageSection usage={run.usage} billingMode={run.billingMode} title={`Usage · ${costLabel(run.usage.costUsd, run.billingMode).text}`} />
     </>
   );
 }

@@ -52,6 +52,8 @@ const OUTPUT_LIMIT = 4000;
 const INSTRUCTIONS_LIMIT = 1500;
 const DIFF_STAT_LIMIT = 3000;
 const SUMMARY_LIMIT = 600;
+/** Step entries passed to a status entry: titles only, the newest ones. */
+const STATUS_HISTORY_LIMIT = 15;
 
 const BRIEF_SYSTEM_PROMPT =
   "You write the brief of automated software runs: short, factual summaries of each step for the person who started the run. Answer only from the information given.";
@@ -88,8 +90,11 @@ function parseSummary(result: HeadlessResult): BriefSummary {
 /**
  * The run brief (DESIGN §13.6): when a step of a run whose graph has `settings.brief.enabled` finishes (succeeded
  * or failed), a pending entry is recorded and a headless Claude call summarises the step in the context of the
- * entries before it; when the run ends, one more entry summarises the whole run. Calls are serial per run (each
- * entry sees the ones before it) and never block or fail the run: a failed call only marks its entry failed.
+ * entries before it; when the run ends, one more entry summarises the whole run. After each of those entries the
+ * run's status (kind "status": done, how it goes, what is left, in a few lines) is rewritten, always with
+ * DEFAULT_BRIEF_MODEL; a status request superseded by a newer one still in the queue is dropped. Calls are serial
+ * per run (each entry sees the ones before it) and never block or fail the run: a failed call only marks its
+ * entry failed.
  * Every change emits `brief:update`, and `run:update` once a call's usage is recorded. Entries left pending by a
  * daemon that stopped are marked failed by markInterrupted.
  */
@@ -97,6 +102,8 @@ export class RunBriefer {
   private readonly queues = new Map<string, Promise<void>>();
   private readonly abort = new AbortController();
   private readonly summarize: Summarize;
+  /** Per run: the ticket of the newest status request (older queued ones are dropped when they come up). */
+  private readonly statusTickets = new Map<string, number>();
 
   constructor(private readonly deps: RunBrieferDeps) {
     this.summarize = deps.summarize ?? summarizeWithClaude;
@@ -112,6 +119,7 @@ export class RunBriefer {
     const entry = store.insertBriefEntry({ runId, kind: "node", nodeRunId, nodeId: nodeRun.nodeId, outcome: nodeRun.status });
     this.emit(entry);
     this.enqueue(runId, () => this.write(entry.id));
+    this.requestStatus(runId);
   }
 
   /** The run ended: summarises it as a whole when at least one step was summarised. */
@@ -124,6 +132,26 @@ export class RunBriefer {
     const entry = store.insertBriefEntry({ runId, kind: "run", nodeRunId: null, nodeId: null, outcome: run.status });
     this.emit(entry);
     this.enqueue(runId, () => this.write(entry.id));
+    this.requestStatus(runId);
+  }
+
+  /**
+   * Queues a rewrite of the run's status after the entries already queued. Only the newest request runs: an older
+   * one still waiting in the queue when a newer one arrives is dropped, as the newer one sees the later state.
+   */
+  private requestStatus(runId: string): void {
+    const ticket = (this.statusTickets.get(runId) ?? 0) + 1;
+    this.statusTickets.set(runId, ticket);
+    this.enqueue(runId, async () => {
+      if (this.statusTickets.get(runId) !== ticket || this.abort.signal.aborted) return;
+      this.statusTickets.delete(runId);
+      const { store } = this.deps;
+      const run = store.getRun(runId);
+      if (!run) return;
+      const entry = store.insertBriefEntry({ runId, kind: "status", nodeRunId: null, nodeId: null, outcome: run.status });
+      this.emit(entry);
+      await this.write(entry.id);
+    });
   }
 
   /** Stops the calls in progress (their entries are marked failed) and waits for the queues. */
@@ -158,10 +186,12 @@ export class RunBriefer {
     try {
       const prompt = await this.buildPrompt(run, entry);
       const settings = run.graphSnapshot.settings.brief;
+      // The status is rewritten after every entry: it always uses the small default model.
+      const model = entry.kind === "status" ? DEFAULT_BRIEF_MODEL : settings.model?.trim() || DEFAULT_BRIEF_MODEL;
       const { summary, usage } = await this.summarize({
         prompt,
         cwd: this.deps.repo.path,
-        model: settings.model?.trim() || DEFAULT_BRIEF_MODEL,
+        model,
         timeoutMs: this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         signal: this.abort.signal,
         env: this.deps.env ?? process.env,
@@ -190,6 +220,7 @@ export class RunBriefer {
   }
 
   private async buildPrompt(run: Run, entry: RunBriefEntry): Promise<string> {
+    if (entry.kind === "status") return this.buildStatusPrompt(run, entry);
     const { store } = this.deps;
     const graph = run.graphSnapshot;
     const nodes = new Map(graph.nodes.map((n) => [n.id, n] as const));
@@ -225,6 +256,38 @@ export class RunBriefer {
       parts.push(await this.describeRun(run));
       parts.push(RUN_SUMMARY_INSTRUCTIONS);
     }
+    return parts.join("\n\n");
+  }
+
+  /**
+   * The status entry's prompt: every step's current state (stepOutcome, or not started), the step entries so far
+   * (titles), the closing entry when there is one and the previous status, for a few lines on what is done, how
+   * it is going and what is left.
+   */
+  private buildStatusPrompt(run: Run, entry: RunBriefEntry): string {
+    const { store } = this.deps;
+    const graph = run.graphSnapshot;
+    const nodeRuns = store.listNodeRuns(run.id);
+    const earlier = store.listBriefEntries(run.id).filter((e) => e.id < entry.id && e.status === "ready");
+    const steps = graph.nodes.map((node) => {
+      const runs = nodeRuns.filter((nr) => nr.nodeId === node.id);
+      return `- ${nodeDisplayLabel(node)} (${node.type}): ${runs.length ? stepOutcome(runs) : "not started yet"}`;
+    });
+    const stepEntries = earlier.filter((e) => e.kind === "node").slice(-STATUS_HISTORY_LIMIT);
+    const closing = earlier.filter((e) => e.kind === "run").at(-1);
+    const previous = earlier.filter((e) => e.kind === "status").at(-1);
+    const instructions = graph.nodes.map(nodeInstructions).find((text) => text.trim()) ?? "";
+    const runState = `${run.status}${run.error ? ` (${run.error})` : ""}`;
+    const parts = [
+      "You keep the status line of a promptgraph run: a few lines the user reads at a glance to know what is done, whether it is going well, and what is left.",
+      `Graph: ${graph.name}\nRun: ${runState}${run.status === "running" || run.status === "paused" ? "" : " (the run has ended)"}`,
+      `Current state of each step (latest attempt of its latest iteration):\n${steps.join("\n")}`,
+      `Steps summarised so far:\n${stepEntries.length ? stepEntries.map((e) => `- ${e.title} (${e.outcome})`).join("\n") : "(none)"}`,
+    ];
+    if (closing) parts.push(`Summary of the whole run: ${closing.title}`);
+    if (previous) parts.push(`Previous status:\n${previous.title}\n${previous.summary ?? ""}`);
+    if (instructions) parts.push(`Instructions of the first step, for the language only:\n${truncate(instructions, 300)}`);
+    parts.push(STATUS_INSTRUCTIONS);
     return parts.join("\n\n");
   }
 
@@ -300,6 +363,14 @@ const RUN_SUMMARY_INSTRUCTIONS = [
   "  ### Decisions: branches taken by conditions, approvals and rejections with their comments, loops, retries and skips, and the choices the steps report having made;",
   "  ### To check: what the user should review or do next.",
   'Write "None." under a section with nothing to say. Write in the language of the step instructions (English when unclear), headings included. Answer only from the information above.',
+].join("\n");
+
+/** What a status entry is asked to write. */
+const STATUS_INSTRUCTIONS = [
+  "Write the current status of the run:",
+  "- title: one line (at most 70 characters) with the overall state, e.g. how many steps are done and whether all is well, something failed or the user is needed;",
+  "- summary: a Markdown bullet list of at most 3 bullets, each one short sentence: what is done, what is running or went wrong (or that all is going well), and what is left (the remaining steps by name, or nothing left).",
+  "Do not repeat the step summaries. Write in the language of the step instructions (English when unclear). Answer only from the information above.",
 ].join("\n");
 
 /** One step's outcome for the run summary: its result and the decisions recorded in its node runs. */
