@@ -22,6 +22,9 @@ import { regexError } from "../condition.js";
 import { isValidBranchPrefix } from "../linear.js";
 import type { ValidateOptions, ValidationIssue, ValidationResult } from "./types.js";
 
+/** Node types whose output carries an exit code (exit-code conditions evaluate them, §15.2; `test`, §25.3). */
+const EXIT_CODE_NODE_TYPES: readonly NodeType[] = ["shell", "test"];
+
 /** Node types whose work leaves uncommitted changes in the lane (for the §18 Q1 warning). */
 const WORK_NODE_TYPES: readonly NodeType[] = [...CLAUDE_NODE_TYPES, "shell"];
 /** Node types that end with a commit in the lane. */
@@ -77,6 +80,7 @@ export function validateGraph(graph: Graph, options: ValidateOptions = {}): Vali
       });
     }
     checkNodeConfig(graph, node, out, phase);
+    checkRepoCommands(node, options.repoCommands, out);
     if (isClaudeNode(node) && node.config.completion) checkCompletion(node.config.completion, out, node.id);
     if (!node.label.trim()) out.warn({ code: "empty_label", message: "Node has no label.", nodeId: node.id });
   }
@@ -208,6 +212,8 @@ function checkNodeConfig(graph: Graph, node: GraphNode, out: Collector, phase: 1
       break;
     case "approval":
     case "merge":
+    case "app":
+    case "test":
       break;
     case "linear":
       if (!node.config.allowComments && !node.config.allowStateChanges) {
@@ -237,6 +243,30 @@ function checkNodeConfig(graph: Graph, node: GraphNode, out: Collector, phase: 1
 }
 
 /**
+ * `app` / `test` nodes (§25.3) name commands of the repository settings. Checked only when the caller knows them
+ * (`options.repoCommands`): a graph file is valid on its own, the settings live next to it.
+ */
+function checkRepoCommands(node: GraphNode, repo: ValidateOptions["repoCommands"], out: Collector): void {
+  if (!repo) return;
+  if (node.type === "app") {
+    if (repo.apps.length === 0) {
+      out.error({ code: "repo_command_missing", message: "No application is configured: set one up in the repository settings.", nodeId: node.id });
+    } else if (node.config.appId && !repo.apps.includes(node.config.appId)) {
+      out.error({ code: "repo_command_missing", message: `The repository settings have no app "${node.config.appId}".`, nodeId: node.id });
+    }
+  } else if (node.type === "test") {
+    if (repo.checks.length === 0) {
+      out.error({ code: "repo_command_missing", message: "No test or check is configured: set them up in the repository settings.", nodeId: node.id });
+    } else {
+      const unknown = (node.config.checks ?? []).filter((id) => !repo.checks.includes(id));
+      if (unknown.length) {
+        out.error({ code: "repo_command_missing", message: `The repository settings have no check ${unknown.map((id) => `"${id}"`).join(", ")}.`, nodeId: node.id });
+      }
+    }
+  }
+}
+
+/**
  * Joins (§9.2 rule 5, §15.3): a non-merge node with several inputs is invalid, unless (phase 2) every
  * pair of inputs comes from mutually exclusive branches (`edgesMutuallyExclusive`) that run in the same
  * lane (otherwise their work is in different worktrees and only a merge can combine it). Merge nodes need
@@ -256,16 +286,16 @@ function checkJoins(topo: Topology, plan: LanePlan | null, out: Collector, phase
       // Loop edges do not count: the condition needs a forward predecessor to evaluate on its first pass.
       out.error({ code: "condition_input", message: "A condition node evaluates its predecessor; connect one.", nodeId: node.id });
     }
-    if (phase === 2 && node.type === "condition" && node.config.evaluator.kind === "exitCode" && inputs.some((e) => topo.nodes.get(e.source)?.type !== "shell")) {
-      out.error({ code: "invalid_config", message: "An exit-code condition needs a shell predecessor.", nodeId: node.id });
+    if (phase === 2 && node.type === "condition" && node.config.evaluator.kind === "exitCode" && inputs.some((e) => !EXIT_CODE_NODE_TYPES.includes(topo.nodes.get(e.source)?.type as NodeType))) {
+      out.error({ code: "invalid_config", message: "An exit-code condition needs a shell or Run tests predecessor.", nodeId: node.id });
     }
     if (phase === 2 && node.type === "condition" && node.config.evaluator.kind === "exitCode") {
       for (const e of inputs) {
-        if (topo.nodes.get(e.source)?.type !== "shell" || edgeWhen(e) !== "success") continue;
+        if (!EXIT_CODE_NODE_TYPES.includes(topo.nodes.get(e.source)?.type as NodeType) || edgeWhen(e) !== "success") continue;
         out.warn({
           code: "condition_input",
           message:
-            "A failing shell step (exit code ≠ 0) fails and never reaches this condition through a success edge; " +
+            "A failing shell or Run tests step (exit code ≠ 0) fails and never reaches this condition through a success edge; " +
             'set the edge to "always" so the condition also evaluates failures.',
           nodeId: node.id,
           edgeId: e.id,

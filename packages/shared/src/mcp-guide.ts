@@ -74,6 +74,7 @@ export const MCP_TOOL_GROUPS: readonly McpToolGroup[] = [
       { name: "validate_graph", summary: "Errors and warnings of a saved graph or an unsaved draft." },
       { name: "delete_graph", summary: "Deletes a graph file.", confirmFirst: true },
       { name: "list_commands", summary: "Slash commands and skills available to command steps." },
+      { name: "get_repo_settings", summary: "The repository's configured apps and tests, for Start app and Run tests steps." },
     ],
   },
   {

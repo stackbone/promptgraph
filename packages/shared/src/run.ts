@@ -24,6 +24,20 @@ export const NodeRunOutputSchema = z.object({
   /** shell: last 200 lines of combined output, ANSI stripped. */
   stdoutTail: z.string().optional(),
   timedOut: z.boolean().optional(),
+  /** app (§25.3): the application started and where it is reachable. */
+  app: z.object({ appId: z.string(), name: z.string(), url: z.string().nullable() }).optional(),
+  /** test (§25.3): one result per check, in the order they ran (checks after a failure may be skipped). */
+  checks: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        status: z.enum(["passed", "failed", "skipped"]),
+        exitCode: z.number().nullable(),
+        durationMs: z.number().nullable(),
+      }),
+    )
+    .optional(),
   /** commit/merge: resulting commit. */
   sha: z.string().optional(),
   /** commit: commit message. */

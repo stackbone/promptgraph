@@ -21,6 +21,7 @@ export const VALIDATION_CODES = [
   "pr_requires_approval",
   "phase2_unsupported",
   "unsupported_node_type",
+  "repo_command_missing",
   // warnings
   "uncommitted_before_pr",
   "uncommitted_before_merge",
@@ -59,4 +60,9 @@ export interface ValidateOptions {
    * The server passes its runner registry's types until all milestones land.
    */
   supportedNodeTypes?: readonly NodeType[];
+  /**
+   * Ids of the repository's configured apps and checks (repository settings, §25.1). When given, `app` / `test`
+   * nodes naming none or an unknown one are errors (`repo_command_missing`). Absent: not checked.
+   */
+  repoCommands?: { apps: readonly string[]; checks: readonly string[] };
 }

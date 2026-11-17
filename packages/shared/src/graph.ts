@@ -5,7 +5,7 @@ import { branchPrefixForIssue, GraphIssuesSchema, type GraphIssue } from "./line
 // Shared enums
 // ---------------------------------------------------------------------------
 
-export const NODE_TYPES = ["prompt", "command", "shell", "commit", "pr", "approval", "merge", "condition", "linear"] as const;
+export const NODE_TYPES = ["prompt", "command", "shell", "app", "test", "commit", "pr", "approval", "merge", "condition", "linear"] as const;
 export const NodeTypeSchema = z.enum(NODE_TYPES);
 export type NodeType = z.infer<typeof NodeTypeSchema>;
 
@@ -84,6 +84,33 @@ export const ShellConfigSchema = z.object({
 });
 export type ShellConfig = z.infer<typeof ShellConfigSchema>;
 
+/**
+ * `app` nodes (§25.3): start one of the repository's applications (repository settings, §25.1) in the lane and
+ * succeed once it is reachable, with its URL as output. The process keeps running until the run ends.
+ */
+export const AppConfigSchema = z.object({
+  /** Id of the app in the repository settings; absent = the first configured app. */
+  appId: z.string().optional(),
+  /** How long to wait for the app to become reachable; absent = 180 s. */
+  readyTimeoutSec: z.number().int().positive().max(3600).optional(),
+});
+export type AppConfig = z.infer<typeof AppConfigSchema>;
+
+/**
+ * `test` nodes (§25.3): run the repository's tests and checks (repository settings, §25.1) in the lane, one after
+ * the other; the node succeeds when every one passes.
+ */
+export const TestConfigSchema = z.object({
+  /** Ids of the checks to run, in the settings' order; absent or empty = every configured check. */
+  checks: z.array(z.string()).optional(),
+  /** Keep running the remaining checks after one fails (default true: report every result). */
+  continueOnFailure: z.boolean().default(true),
+});
+export type TestConfig = z.infer<typeof TestConfigSchema>;
+
+/** Default wait for an `app` node's application to become reachable. */
+export const DEFAULT_APP_READY_TIMEOUT_SEC = 180;
+
 export const CommitConfigSchema = z.object({
   /** Fixed message; used only when generateMessage is false. */
   message: z.string().optional(),
@@ -154,6 +181,8 @@ export const NODE_CONFIG_SCHEMAS = {
   prompt: PromptConfigSchema,
   command: CommandConfigSchema,
   shell: ShellConfigSchema,
+  app: AppConfigSchema,
+  test: TestConfigSchema,
   commit: CommitConfigSchema,
   pr: PrConfigSchema,
   approval: ApprovalConfigSchema,
@@ -185,6 +214,8 @@ const nodeBase = {
 export const PromptNodeSchema = z.object({ ...nodeBase, type: z.literal("prompt"), config: PromptConfigSchema.prefault({}) });
 export const CommandNodeSchema = z.object({ ...nodeBase, type: z.literal("command"), config: CommandConfigSchema.prefault({}) });
 export const ShellNodeSchema = z.object({ ...nodeBase, type: z.literal("shell"), config: ShellConfigSchema.prefault({}) });
+export const AppNodeSchema = z.object({ ...nodeBase, type: z.literal("app"), config: AppConfigSchema.prefault({}) });
+export const TestNodeSchema = z.object({ ...nodeBase, type: z.literal("test"), config: TestConfigSchema.prefault({}) });
 export const CommitNodeSchema = z.object({ ...nodeBase, type: z.literal("commit"), config: CommitConfigSchema.prefault({}) });
 export const PrNodeSchema = z.object({ ...nodeBase, type: z.literal("pr"), config: PrConfigSchema.prefault({}) });
 export const ApprovalNodeSchema = z.object({ ...nodeBase, type: z.literal("approval"), config: ApprovalConfigSchema.prefault({}) });
@@ -196,6 +227,8 @@ export const NodeSchema = z.discriminatedUnion("type", [
   PromptNodeSchema,
   CommandNodeSchema,
   ShellNodeSchema,
+  AppNodeSchema,
+  TestNodeSchema,
   CommitNodeSchema,
   PrNodeSchema,
   ApprovalNodeSchema,

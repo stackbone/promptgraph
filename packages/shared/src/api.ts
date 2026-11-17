@@ -423,6 +423,18 @@ function repoApi(repoId: string) {
     gitLog: (limit?: number) => `${base}/git/log${limit ? `?limit=${limit}` : ""}`,
     /** GET → GitStateResponse: HEAD, status and the signature the Git graph polls (§13.7). */
     gitState: `${base}/git/state`,
+    /** GET → RepoSettingsResponse · PUT SaveRepoSettingsRequest → RepoSettingsResponse (§25.1). */
+    settings: `${base}/settings`,
+    /** POST → RepoSettingsResponse: starts the analysis (§25.2); 409 analysis_running while one runs. */
+    analyze: `${base}/settings/analyze`,
+    /** GET → AppsStatusResponse (§25.4). */
+    apps: `${base}/apps`,
+    /** POST StartAppsRequest → AppsStatusResponse. */
+    startApps: `${base}/apps/start`,
+    /** POST StopAppsRequest → AppsStatusResponse. */
+    stopApps: `${base}/apps/stop`,
+    /** POST RunChecksRequest → RunChecksResponse (§25.7). */
+    runChecks: `${base}/checks/run`,
   } as const;
 }
 export type RepoApiPaths = ReturnType<typeof repoApi>;
