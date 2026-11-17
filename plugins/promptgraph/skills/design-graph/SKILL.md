@@ -1,6 +1,6 @@
 ---
 name: design-graph
-description: Design or edit a promptgraph graph, a flow of Claude Code steps (prompts, slash commands, shell, commit, PR, approval, merge, condition) that runs in parallel git worktrees. Use when the user asks to "create a graph", "make a promptgraph flow/pipeline/diagram", "split this work into parallel steps", "add a test-fix loop", or to change an existing graph in .promptgraph/graphs.
+description: Design or edit a promptgraph graph, a flow of Claude Code steps (prompts, slash commands, shell, run tests, start app, commit, PR, approval, merge, condition) that runs in parallel git worktrees. Use when the user asks to "create a graph", "make a promptgraph flow/pipeline/diagram", "split this work into parallel steps", "add a test-fix loop", or to change an existing graph in .promptgraph/graphs.
 ---
 
 # Design a promptgraph graph
@@ -19,9 +19,11 @@ The tools come from the `promptgraph` MCP server.
    registers this repository). If it reports a version mismatch, ask the user to run `promptgraph stop`
    in a terminal; do not stop the daemon yourself.
 2. **Learn the format.** Call `graph_reference` once per session. Use `list_commands` before you put a
-   slash command in a `command` node, and use only commands it lists.
+   slash command in a `command` node, and use only commands it lists. Call `get_repo_settings` to see the
+   repository's configured tests and apps: they decide how the graph checks its work (see "Check the result").
 3. **Understand the work.** Read the code involved and ask the user what is unclear: the goal, the
-   test command, the base branch, whether the result should become a PR. For a new graph, also ask
+   test command (only when `get_repo_settings` lists no checks), the base branch, whether the result should
+   become a PR. For a new graph, also ask
    how complex it should be — **Simple** (2–4 sequential steps, no loops), **Standard** (5–8 steps
    with a test-fix loop or a review) or **Complex** (parallel lanes joined by a merge, review loops,
    approval gates) — unless the user already said. Ask everything in one go, with the
@@ -52,16 +54,32 @@ The tools come from the `promptgraph` MCP server.
   sessions use the usage limits.
 
 **Check the result**
-- Use `shell` steps with the project's real commands to check the work (`pnpm test`, `cargo build`,
-  `npm run lint`). Look them up in package.json, the Makefile or CI. Do not guess them.
-- For "until green", build a **test-fix loop**: `shell` test → (`"when": "always"`) `condition`
+- **Verification is a step of its own, never a sentence in a prompt.** Do not end a prompt with "then run the
+  tests", "check that it builds" or "make sure lint passes": the run cannot see whether that happened, the step
+  cannot fail on it, and nothing can loop on it. Put a checking step after the work instead.
+- **When `get_repo_settings` lists checks, use a `test` node** ("Run tests"). It runs the repository's configured
+  tests and checks in the lane and fails when one fails, with one result per check. Leave `checks` out to run all of
+  them, or pick ids from `get_repo_settings` (for example only `unit` and `typecheck` in a quick loop). Do not copy
+  those commands into a `shell` node.
+- Use a `shell` step only for a command the settings do not have, with the project's real command (look it up in
+  package.json, the Makefile or CI; do not guess it). When the settings list no checks and the graph needs tests,
+  tell the user they can set them up in the repository settings (or analyse the repository there) and use `shell`
+  meanwhile.
+- For "until green", build a **test-fix loop**: `test` (or `shell`) → (`"when": "always"`) `condition`
   exitCode=0 → `true`: continue, `false`: a `prompt` fix with `"context": "resume"` → a loop edge
-  back to the **shell** step (`"loop": {"maxIterations": 3}`).
+  back to the **test** step (`"loop": {"maxIterations": 3}`).
+- When a step must look at the running application (an end-to-end check, screenshots, trying the UI), put an
+  `app` node ("Start app", only when `get_repo_settings` lists apps) before it in the same lane. It starts the app
+  in the worktree, waits until it is reachable and outputs its URL, which the next `fresh` prompt receives in its
+  context; the app keeps running until the run ends. Tell that prompt to use the URL from the previous step.
 - For review cycles, use `command` "/code-review" (if `list_commands` has it), then a `judge`
   condition ("Did the review report blocking issues?"), then a fix prompt, then a loop edge back to the
   review.
-- Set `settings.workspaceSetup` (for example `pnpm install`) when the tests need dependencies: each new
-  worktree starts without `node_modules`.
+- Each new worktree starts with only what git tracks (no `node_modules`, no `.env`). The repository settings
+  prepare it: `get_repo_settings` shows `worktreeSetup` (for example `pnpm install`, run in every new worktree) and
+  `copiedIntoWorktrees` (local files such as `.env` copied in). Set the graph's `settings.workspaceSetup` only when
+  this graph needs something else; when the repository has no `worktreeSetup` and the steps need dependencies, set
+  it, and tell the user they can set it once for every graph in the repository settings.
 
 **Git and safety**
 - Add a `commit` step before `pr` and before `merge`. Without it, uncommitted changes only reach the
