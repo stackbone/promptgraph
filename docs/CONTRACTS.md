@@ -1104,8 +1104,9 @@ components/home/FolderPicker.tsx PathInput (path combobox with folder suggestion
 views/RoutedView.tsx             the view of the location: Home, NotFound, or RepoRoot (RepoRemoved while removed, else RepoView)
 views/RepoView.tsx               one view of a repository: own run + UI stores, shared editor store, repo subscription, route sync;
                                  active from the TabContext (prop overrides; true outside tabs); reports its title and editor to the tab
-views/Workspace.tsx              editor / run layout (banners, sidebars, canvas, drawer, dialogs; no top bar: CanvasOverlay floats the
-                                 run menu and linked issues top left, run controls top right); report route replaces the canvas row
+views/Workspace.tsx              editor / run layout (banners, canvas, inspector sidebar, drawer, dialogs; no top bar, no left sidebar:
+                                 CanvasOverlay floats the linked issues top left, the save indicator and inspector toggle top right;
+                                 CanvasToolbar sits at the bottom of the canvas); report route replaces the canvas row
 views/NotFound.tsx               FullScreenMessage, NotFound (link Home), RepoRemoved (Add again / Close tab; outside tabs: Home)
 components/tabs/TabStrip.tsx     role=tablist, roving tabindex (arrows, Home/End; Enter/Space activate, Delete closes); per tab: title,
                                  attention dot ("Needs attention"), × ("Close <title>"); middle-click closes; "+" (New tab) opens Home
@@ -1137,8 +1138,13 @@ components/tabs/use-tab-title.ts useTabTitle(tab) (daemon summary name or cache 
 components/common/SessionBanners Reconnecting / Unreachable / version banners, SignedOut full screen. Prop `bridge`: in the desktop
                                  window SessionBanners runs useAutoReloginWhenUnreachable and the Unreachable banner has Retry
                                  (relogin); SignedOut calls relogin(current path) once by itself, then shows "Sign in again"
-components/header/               Run/Cancel, pending approvals (links), run selector (links, floated over the canvas), run cost total
-components/palette/              draggable node types (prompt, command, shell, commit, pr, approval, merge; condition when phase 2)
+components/header/               RunButton (Run/Cancel/Resume), ProblemsButton, ShownRunInfo (run cost, Report), UndoRedoControls,
+                                 ArrangeButton, RunSelector (links, opens upwards), pending approvals (links), SaveIndicator
+components/toolbar/              CanvasToolbar: role=toolbar "Graph toolbar", bottom centre of the canvas: NodesMenu, RunSelector,
+                                 ShownRunInfo | Undo, Redo, Arrange | RunButton (icon-only except the run menu and Run),
+                                 ProblemsButton as a badge right of the toolbar (popover listing the problems)
+components/palette/              NodesMenu (icon button, popover above the toolbar; hidden while dragging, closed on add/drop) and
+                                 Palette: draggable node types (prompt, command, shell, commit, pr, approval, merge; condition when phase 2)
 components/canvas/               React Flow canvas: snap grid, minimap, edge creation (error/true/false ports in phase 2), read-only in run mode
 components/nodes/                node cards: status colour (§8.2), elapsed time, activity, lane badge, tokens/cost, validation outline + tooltip
 components/inspector/            node config forms; run mode: NodeRun details (output, session, branch, timings, error, usage) + controls
@@ -1249,7 +1255,7 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
   `externalChange` (file changed on disk while dirty), `discarded`, multi-selection `selectedNodeIds/selectedEdgeIds`
   (`selectedNodeId/EdgeId` only when exactly one element is selected) and actions; `RunStore extends RunState` adds
   `graphId`, `detailError`, `detailNotFound`, `selectedNodeId` (run-canvas inspection); `UiStore extends UiState` adds
-  `tabMeta`, `drawerOpen`, `leftPanel` (palette | history), `lastLoopSpec`. Test seams: `createEditorStore(…,
+  `tabMeta`, `drawerOpen`, `inspectorOpen`, `inspectorWidth`, `lastLoopSpec`. Test seams: `createEditorStore(…,
   {persistence})`, `createRunStore(…, deps)`, `createRepoCache(id, api)`, `new WsClient(opts)`, `createTestView()`,
   `src/test-daemon.ts` (fake daemon behind fetch + FakeSocket, `resetGlobals`).
 - `WsClient.resizePty(ptyId, cols, rows)` remembers the size for re-attach. On every `pty:attached` (first attach and
