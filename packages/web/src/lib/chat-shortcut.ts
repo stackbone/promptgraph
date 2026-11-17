@@ -12,3 +12,15 @@ export function onChatShortcut(listener: () => void): () => void {
 export function emitChatShortcut(): void {
   for (const l of listeners) l();
 }
+
+/** The Git graph shortcut (Ctrl+Shift+G / Alt+Shift+G, DESIGN §13.7), heard by the active tab's GitGraphDock. */
+const gitGraphListeners = new Set<() => void>();
+
+export function onGitGraphShortcut(listener: () => void): () => void {
+  gitGraphListeners.add(listener);
+  return () => void gitGraphListeners.delete(listener);
+}
+
+export function emitGitGraphShortcut(): void {
+  for (const l of gitGraphListeners) l();
+}

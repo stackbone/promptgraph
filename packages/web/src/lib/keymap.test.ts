@@ -27,6 +27,15 @@ describe("keymap resolver (DESIGN §13.4)", () => {
     expect(resolveKey(key("KeyJ", ctrl), { desktop: true, terminalFocused: true })).toBeNull();
   });
 
+  it("Ctrl+Shift+G and Alt+Shift+G toggle the Git graph (§13.7), but not while a terminal has focus", () => {
+    for (const ctx of [browser, desktop]) {
+      expect(resolveKey(key("KeyG", { ...ctrl, shiftKey: true }), ctx)).toEqual({ type: "toggleGitGraph" });
+      expect(resolveKey(key("KeyG", { ...alt, shiftKey: true }), ctx)).toEqual({ type: "toggleGitGraph" });
+      expect(resolveKey(key("KeyG", ctrl), ctx)).toBeNull();
+    }
+    expect(resolveKey(key("KeyG", { ...ctrl, shiftKey: true }), { desktop: true, terminalFocused: true })).toBeNull();
+  });
+
   it("browser: the Alt fallbacks only", () => {
     expect(resolveKey(key("KeyT", alt), browser)).toEqual({ type: "newTab" });
     expect(resolveKey(key("KeyW", alt), browser)).toEqual({ type: "closeTab" });

@@ -17,6 +17,8 @@ import {
   type DiffScope,
   type GetGraphResponse,
   type GetRunResponse,
+  type GitLogResponse,
+  type GitStateResponse,
   type Graph,
   type LinearIssueStatesResponse,
   type LinearIssuesResponse,
@@ -302,6 +304,14 @@ export function repoApi(repoId: string) {
     },
     async deleteChatSession(id: string): Promise<void> {
       await request("DELETE", p.chatSession(id));
+    },
+    /** The commit history for the Git graph panel (§13.7). */
+    gitLog(limit?: number): Promise<GitLogResponse> {
+      return request("GET", p.gitLog(limit));
+    },
+    /** HEAD, status and the signature the Git graph polls to know when to re-read the log (§13.7). */
+    gitState(): Promise<GitStateResponse> {
+      return request("GET", p.gitState);
     },
   };
 }

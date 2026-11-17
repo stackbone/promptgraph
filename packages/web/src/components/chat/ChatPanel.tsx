@@ -14,6 +14,7 @@ import { useEditor, useRun, useView } from "../../store/view/context";
 import { useDictation } from "../../lib/voice/use-dictation";
 import { isDictationActive, useVoiceStore } from "../../store/voice-store";
 import { ConfirmDialog } from "../common/PromptDialog";
+import { SidePanelResizeHandle, useSidePanelWidth, type SidePanelSize } from "../common/side-panel-resize";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import { ChatItems, PermissionCard } from "./ChatItems";
@@ -41,7 +42,7 @@ export interface ChatWindowActions {
  * panel, resizable from its left edge. Header with the title, cost and the window actions; then the conversation.
  */
 export function ChatWindow({ sessionId, actions, docked = false }: { sessionId: string; actions: ChatWindowActions; docked?: boolean }) {
-  const [width, setWidth] = useState(readDockWidth);
+  const [width, setWidth] = useSidePanelWidth(CHAT_DOCK_SIZE);
   return (
     <section
       aria-label="Chat"
@@ -63,73 +64,15 @@ export function ChatWindow({ sessionId, actions, docked = false }: { sessionId: 
         }
       }}
     >
-      {docked && <ResizeHandle width={width} onResize={setWidth} />}
+      {docked && <SidePanelResizeHandle size={CHAT_DOCK_SIZE} width={width} onResize={setWidth} label="Resize chat" />}
       <ChatHeader sessionId={sessionId} actions={actions} />
       <ChatConversation sessionId={sessionId} />
     </section>
   );
 }
 
-const DOCK_WIDTH_KEY = "pg.chat.dockWidth";
-const DOCK_MIN_WIDTH = 320;
-const DOCK_DEFAULT_WIDTH = 440;
-
-function readDockWidth(): number {
-  try {
-    const n = Number(localStorage.getItem(DOCK_WIDTH_KEY));
-    return Number.isFinite(n) && n >= DOCK_MIN_WIDTH ? n : DOCK_DEFAULT_WIDTH;
-  } catch {
-    return DOCK_DEFAULT_WIDTH;
-  }
-}
-
-/** The docked panel's left edge: drag (or ←/→) to resize; the width is remembered per browser. */
-function ResizeHandle({ width, onResize }: { width: number; onResize(width: number): void }) {
-  const clamp = (w: number) => Math.round(Math.min(Math.max(w, DOCK_MIN_WIDTH), window.innerWidth * 0.6));
-  const commit = (w: number) => {
-    onResize(w);
-    try {
-      localStorage.setItem(DOCK_WIDTH_KEY, String(w));
-    } catch {
-      // Storage unavailable: the width lasts for this page only.
-    }
-  };
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize chat"
-      aria-valuenow={width}
-      aria-valuemin={DOCK_MIN_WIDTH}
-      tabIndex={0}
-      className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none"
-      onPointerDown={(e) => {
-        e.preventDefault();
-        const startX = e.clientX;
-        const startWidth = width;
-        let last = startWidth;
-        const move = (ev: PointerEvent) => {
-          last = clamp(startWidth + startX - ev.clientX);
-          onResize(last);
-        };
-        const up = () => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", up);
-          document.body.style.cursor = "";
-          commit(last);
-        };
-        document.body.style.cursor = "col-resize";
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
-      }}
-      onKeyDown={(e) => {
-        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-        e.preventDefault();
-        commit(clamp(width + (e.key === "ArrowLeft" ? 32 : -32)));
-      }}
-    />
-  );
-}
+/** The docked chat's width (DESIGN §21.11). */
+const CHAT_DOCK_SIZE: SidePanelSize = { key: "pg.chat.dockWidth", min: 320, default: 440 };
 
 /** One session's conversation: messages with streamed text and folded tool calls, the permission card, a status line and the composer. */
 export function ChatConversation({ sessionId }: { sessionId: string }) {

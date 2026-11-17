@@ -1,5 +1,5 @@
 import type { ChatSessionSummary } from "@promptgraph/shared";
-import { HistoryIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { HistoryIcon, MessageSquarePlusIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
@@ -157,7 +157,7 @@ function ChatBar({
       <Tooltip>
         <TooltipTrigger asChild>
           <Button variant="ghost" size="sm" aria-label="New chat" className="h-7 shrink-0 gap-1.5 px-2 text-xs" onClick={onNew}>
-            <SquarePenIcon /> Ask Claude
+            <MessageSquarePlusIcon /> Ask Claude
           </Button>
         </TooltipTrigger>
         <TooltipContent className="flex items-center gap-2">

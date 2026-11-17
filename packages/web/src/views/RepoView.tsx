@@ -4,6 +4,7 @@ import { useStore } from "zustand";
 import { repoApi } from "../api/rest";
 import { wsClient } from "../api/ws";
 import { ChatDock } from "../components/chat/ChatDock";
+import { GitGraphDock } from "../components/git/GitGraphDock";
 import { ClaudeStatus } from "../components/claude/ClaudeStatus";
 import { BottomBarActions } from "../components/header/BottomBarActions";
 import { useTabContext } from "../components/tabs/tab-context";
@@ -189,6 +190,7 @@ function RouteViews({ route, own, active }: { route: RepoRoute; own: OwnStores; 
       {content}
       <BottomBarActions />
       <ClaudeStatus />
+      <GitGraphDock />
       <ChatDock />
     </ViewProvider>
   );

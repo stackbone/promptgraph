@@ -14,7 +14,9 @@ export type KeyAction =
   | { type: "gotoTab"; n: number }
   | { type: "lastTab" }
   /** The chat bar of the active tab (§21.11): open its newest chat, a new one, or minimise the open window. */
-  | { type: "toggleChat" };
+  | { type: "toggleChat" }
+  /** The Git graph panel of the active repository tab (§13.7). */
+  | { type: "toggleGitGraph" };
 
 export interface KeyContext {
   /** The desktop window (Ctrl bindings) rather than a browser tab (Alt fallbacks only). */
@@ -75,6 +77,8 @@ export function resolveKey(e: KeyEventLike, ctx: KeyContext): KeyAction | null {
   if (ctx.terminalFocused) return null;
   // Ctrl+J is free in browsers (unlike Ctrl+T/W); in a terminal it is a line feed, hence after the check above.
   if ((m === "ctrl" || m === "alt") && e.code === "KeyJ") return { type: "toggleChat" };
+  // Ctrl+Shift+G (as in VS Code's Source Control) only shadows the browser's "find previous".
+  if ((m === "ctrl+shift" || m === "alt+shift") && e.code === "KeyG") return { type: "toggleGitGraph" };
   return management(e.code, m, "alt") ?? (ctx.desktop ? management(e.code, m, "ctrl") : null);
 }
 

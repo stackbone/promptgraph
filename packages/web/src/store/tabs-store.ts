@@ -2,7 +2,7 @@ import { isSafeNextPath, normalizePath } from "@promptgraph/shared";
 import { z } from "zod";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { emitChatShortcut } from "../lib/chat-shortcut";
+import { emitChatShortcut, emitGitGraphShortcut } from "../lib/chat-shortcut";
 import type { KeyAction } from "../lib/keymap";
 import { parseRoute } from "../lib/router/routes";
 
@@ -584,6 +584,9 @@ export function runTabAction(store: TabsStoreApi, action: KeyAction): void {
       return;
     case "toggleChat":
       emitChatShortcut();
+      return;
+    case "toggleGitGraph":
+      emitGitGraphShortcut();
       return;
   }
 }
