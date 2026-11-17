@@ -5,7 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linearGraph, nodeRunOf, runDetailOf } from "../../test-fixtures";
 import { createTestView, type TestView } from "../../store/view/test-view";
-import { PendingApprovals, RunControls, RunSelector } from "./RunControls";
+import { CanvasToolbar } from "../toolbar/CanvasToolbar";
+import { PendingApprovals, RunSelector } from "./RunControls";
 
 const graph = linearGraph();
 
@@ -197,7 +198,7 @@ describe("Arrange button (§19.3)", () => {
 
   it("lays the nodes out, as one undoable edit, asks the canvas to fit, then is disabled until something moves", async () => {
     const user = userEvent.setup();
-    render(<RunControls />);
+    render(<CanvasToolbar />);
     expect(arrange().disabled).toBe(false);
     await user.click(arrange());
     const nodes = view.editor.getState().graph!.nodes;
@@ -213,7 +214,7 @@ describe("Arrange button (§19.3)", () => {
 
   it("is disabled while a run is shown", () => {
     view.run.setState({ selectedRunId: "r1" });
-    render(<RunControls />);
+    render(<CanvasToolbar />);
     expect(arrange().disabled).toBe(true);
   });
 });
@@ -227,7 +228,7 @@ describe("Undo / Redo controls", () => {
   const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
 
   it("are always shown next to Run, disabled while there is nothing to undo or redo", () => {
-    render(<RunControls />);
+    render(<CanvasToolbar />);
     expect(button("Undo").disabled).toBe(true);
     expect(button("Redo").disabled).toBe(true);
     // Left of Run, in the same row.
@@ -238,7 +239,7 @@ describe("Undo / Redo controls", () => {
 
   it("enable Undo after an edit and Redo after an undo", async () => {
     const user = userEvent.setup();
-    render(<RunControls />);
+    render(<CanvasToolbar />);
     act(() => view.editor.getState().rename("Renamed"));
     expect(button("Undo").disabled).toBe(false);
     await user.click(button("Undo"));
@@ -250,7 +251,7 @@ describe("Undo / Redo controls", () => {
   it("stay shown, disabled while a run is shown and enabled while one is active (live edits)", () => {
     view.editor.setState({ past: [graph], future: [graph] });
     view.run.setState({ selectedRunId: "r1" });
-    render(<RunControls />);
+    render(<CanvasToolbar />);
     expect(button("Undo").disabled).toBe(true);
     expect(button("Redo").disabled).toBe(true);
     act(() => {

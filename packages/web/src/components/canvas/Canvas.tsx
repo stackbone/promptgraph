@@ -440,7 +440,7 @@ function EmptyHint({ readOnly }: { readOnly: boolean }) {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
       <div className="rounded-lg border border-dashed bg-card/70 px-6 py-4 text-center text-sm text-muted-foreground">
-        {readOnly ? "This graph is empty." : "Drag a node from the palette to start, then connect the ports."}
+        {readOnly ? "This graph is empty." : "Add a node with + in the toolbar below, then connect the ports."}
       </div>
     </div>
   );

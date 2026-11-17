@@ -21,11 +21,12 @@ import { useEditor, useRepo, useRun, useTabActive, useView } from "../../store/v
 import { canRedo, canUndo, isReadOnly } from "../../store/view/editor-store";
 import { Icons } from "../common/icons";
 import { ConfirmDialog } from "../common/PromptDialog";
+import { ValidationList } from "../inspector/ValidationList";
 import { Button, ButtonLink, StatusDot } from "../common/ui";
 
 /**
- * Undo / Redo of the editor's local edits, left of Run. Always shown while a graph is open, so the row never
- * shifts; disabled while there is nothing to undo or redo, while the graph is read-only and while a run is shown.
+ * Undo / Redo of the editor's local edits, in the canvas toolbar. Always shown while a graph is open, so the toolbar
+ * never shifts; disabled while there is nothing to undo or redo, while the graph is read-only and while a run is shown.
  */
 export function UndoRedoControls() {
   const { editor } = useView();
@@ -33,7 +34,7 @@ export function UndoRedoControls() {
   const undoable = useEditor((s) => !runMode && canUndo(s));
   const redoable = useEditor((s) => !runMode && canRedo(s));
   return (
-    <div role="group" aria-label="History" className="flex items-center rounded-lg bg-card shadow-soft ring-1 ring-border">
+    <div role="group" aria-label="History" className="flex items-center">
       <IconAction label="Undo" shortcut="Ctrl+Z" disabled={!undoable} onClick={() => editor.getState().undo()}>
         <Undo2Icon />
       </IconAction>
@@ -61,21 +62,24 @@ export function ArrangeButton() {
     <Tooltip>
       <TooltipTrigger asChild>
         {/* A disabled button gets no pointer events: the wrapper keeps the tooltip working. */}
-        <span className="inline-flex rounded-lg bg-card shadow-soft ring-1 ring-border">
+        <span className="inline-flex">
           <Button
             variant="ghost"
-            className="gap-1.5"
+            size="icon"
+            aria-label="Arrange"
             disabled={disabled}
             onClick={() => {
               editor.getState().autoLayout();
               ui.getState().requestFit();
             }}
           >
-            <LayoutGridIcon /> Arrange
+            <LayoutGridIcon />
           </Button>
         </span>
       </TooltipTrigger>
-      <TooltipContent>{hint}</TooltipContent>
+      <TooltipContent>
+        Arrange <span className="text-muted-foreground">{hint}</span>
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -109,8 +113,12 @@ export function useUndoRedoShortcuts() {
   }, [editor, active, runMode]);
 }
 
-/** Run / Cancel, validation summary, and the total cost of the shown run. Floats over the canvas, top right. */
-export function RunControls() {
+/**
+ * The canvas toolbar's run action: Run, or Cancel while a run of the graph is active, with Resume before it while
+ * that run is paused and has nothing to retry or skip. The only toolbar buttons with a label besides the run menu
+ * and the problems button.
+ */
+export function RunButton() {
   const view = useView();
   const graph = useEditor((s) => s.graph);
   const errors = useEditor((s) => s.validation.errors.length);
@@ -123,8 +131,6 @@ export function RunControls() {
   const [confirmCancel, setConfirmCancel] = useState(false);
   if (!graph) return null;
 
-  const shownRun = detail?.run ?? null;
-  const cancellable = activeRunId !== null;
   // A paused run with nothing to retry or skip (e.g. stopped while lanes were being created) resumes as is.
   const resumable =
     activeRun?.status === "paused" &&
@@ -142,39 +148,13 @@ export function RunControls() {
           : "Run the graph";
 
   return (
-    <div className="flex items-center gap-2">
-      {(errors > 0 || warnings > 0) && !detail && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => view.editor.getState().setSelection([], [])}
-          title="Show problems in the inspector"
-          className={`gap-1 text-xs shadow-soft ring-1 ring-border ${errors ? "bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-700 dark:bg-red-950 dark:hover:bg-red-900" : "bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-700 dark:bg-amber-950 dark:hover:bg-amber-900"}`}
-        >
-          <Icons.alert />
-          {errors > 0 && `${errors} error${errors > 1 ? "s" : ""}`}
-          {errors > 0 && warnings > 0 && " · "}
-          {warnings > 0 && `${warnings} warning${warnings > 1 ? "s" : ""}`}
-        </Button>
-      )}
-      {shownRun && (
-        <span className="rounded-md bg-card px-2 py-1 font-mono text-xs text-muted-foreground shadow-soft ring-1 ring-border" title={`${shownRun.usage.inputTokens + shownRun.usage.outputTokens} input+output tokens. ${costLabel(shownRun.usage.costUsd, shownRun.billingMode).title}`}>
-          {costLabel(shownRun.usage.costUsd, shownRun.billingMode).text}
-        </span>
-      )}
-      {shownRun && (
-        <ButtonLink to={webRoutes.report(view.repoId, shownRun.id)} title="Results, changes, commits, cost and where the run stopped">
-          Report
-        </ButtonLink>
-      )}
+    <>
       {resumable && (
         <Button variant="primary" onClick={() => void resumeRun(view, activeRun.id)} title="Continue the paused run">
           <Icons.play /> Resume
         </Button>
       )}
-      <ArrangeButton />
-      <UndoRedoControls />
-      {cancellable ? (
+      {activeRunId !== null ? (
         <Button variant="danger" onClick={() => setConfirmCancel(true)}>
           <Icons.stop /> Cancel
         </Button>
@@ -201,12 +181,69 @@ export function RunControls() {
           onClose={() => setConfirmCancel(false)}
         />
       )}
-    </div>
+    </>
   );
 }
 
 /**
- * Autosave indicator next to the run controls: a spinner while an edit is pending or being written, the error if
+ * The validation badge right of the canvas toolbar, only while the editor has problems: it opens a popover above it
+ * listing them (an issue with a node or edge selects it and closes the popover). Not shown while a run is on the canvas.
+ */
+export function ProblemsButton() {
+  const validation = useEditor((s) => s.validation);
+  const hasGraph = useEditor((s) => s.graph !== null);
+  const runShown = useRun((s) => s.detail !== null);
+  const [open, setOpen] = useState(false);
+  const errors = validation.errors.length;
+  const warnings = validation.warnings.length;
+  if (!hasGraph || (errors === 0 && warnings === 0) || runShown) return null;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Show problems"
+          className={`gap-1 rounded-full text-xs whitespace-nowrap shadow-soft ring-1 ${errors ? "bg-red-50 text-red-700 ring-red-200 hover:bg-red-100 hover:text-red-700 dark:bg-red-950 dark:ring-red-900 dark:hover:bg-red-900" : "bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100 hover:text-amber-700 dark:bg-amber-950 dark:ring-amber-900 dark:hover:bg-amber-900"}`}
+        >
+          <Icons.alert />
+          {errors > 0 && `${errors} error${errors > 1 ? "s" : ""}`}
+          {errors > 0 && warnings > 0 && " · "}
+          {warnings > 0 && `${warnings} warning${warnings > 1 ? "s" : ""}`}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" sideOffset={10} aria-label="Problems" className="max-h-96 w-80 overflow-y-auto p-1">
+        <ValidationList validation={validation} onSelect={() => setOpen(false)} />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** The total cost of the run shown on the canvas and its Report (an icon link), next to the run menu. */
+export function ShownRunInfo() {
+  const view = useView();
+  const shownRun = useRun((s) => s.detail?.run ?? null);
+  if (!shownRun) return null;
+  const cost = costLabel(shownRun.usage.costUsd, shownRun.billingMode);
+  return (
+    <>
+      <span className="px-1.5 font-mono text-xs text-muted-foreground" title={`${shownRun.usage.inputTokens + shownRun.usage.outputTokens} input+output tokens. ${cost.title}`}>
+        {cost.text}
+      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ButtonLink to={webRoutes.report(view.repoId, shownRun.id)} variant="ghost" size="icon" aria-label="Report">
+            <FileTextIcon />
+          </ButtonLink>
+        </TooltipTrigger>
+        <TooltipContent>Report: results, changes, commits, cost and where the run stopped</TooltipContent>
+      </Tooltip>
+    </>
+  );
+}
+
+/**
+ * Autosave indicator at the top right of the canvas: a spinner while an edit is pending or being written, the error if
  * the last save failed, and nothing once the graph is saved.
  */
 export function SaveIndicator() {
@@ -231,8 +268,6 @@ export function SaveIndicator() {
     </span>
   );
 }
-
-/** Value of the editor entry in the run selector's radio group (run ids are never empty). */
 
 /**
  * The run menu (§13.2): what the canvas shows, the editor or one of the graph's runs. Each run shows its status, start,
@@ -266,7 +301,7 @@ export function RunSelector({ className }: { className?: string }) {
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button className={cn("gap-2 px-2.5 font-normal", className)} aria-haspopup="dialog">
+          <Button variant="ghost" className={cn("gap-2 px-2.5 font-normal", className)} aria-haspopup="dialog">
             {selected ? (
               <>
                 <StatusDot className={RUN_STATUS_STYLE[selected.status].dot} />
@@ -285,7 +320,9 @@ export function RunSelector({ className }: { className?: string }) {
           </Button>
         </PopoverTrigger>
         <PopoverContent
+          side="top"
           align="start"
+          sideOffset={10}
           aria-label="Editor and runs"
           className="w-96 p-1"
           onOpenAutoFocus={(e) => {

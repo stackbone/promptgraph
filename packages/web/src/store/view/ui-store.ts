@@ -26,12 +26,9 @@ export interface TerminalTabMeta {
 export interface UiStore extends UiState {
   tabMeta: Record<string, TerminalTabMeta>;
   drawerOpen: boolean;
-  /** Left sidebar expanded (it collapses off-canvas via its header trigger or its edge rail). */
-  sidebarOpen: boolean;
   /** Right sidebar (inspector) expanded (it collapses off-canvas via its edge rail). */
   inspectorOpen: boolean;
-  /** Sidebar widths in px, resized by dragging their edge rail; persisted in localStorage. */
-  sidebarWidth: number;
+  /** Inspector width in px, resized by dragging its edge rail; persisted in localStorage. */
   inspectorWidth: number;
   /** Node the edit canvas should pan to when it is outside the viewport (palette click-to-append). */
   revealNodeId: string | null;
@@ -50,10 +47,7 @@ export interface UiStore extends UiState {
   setDrawerHeight(px: number): void;
   openApproval(nodeRunId: string | null): void;
   openDiff(target: DiffTarget | null): void;
-  /** Shows a left panel, expanding the sidebar if it was collapsed. */
-  setSidebarOpen(open: boolean): void;
   setInspectorOpen(open: boolean): void;
-  setSidebarWidth(px: number): void;
   setInspectorWidth(px: number): void;
   rememberLoopSpec(edgeId: string, spec: LoopSpec): void;
 }
@@ -62,9 +56,8 @@ export type ViewUiStoreApi = StoreApi<UiStore>;
 
 export const MIN_DRAWER_HEIGHT = 120;
 
-export const SIDEBAR_WIDTH = { min: 192, max: 480, default: 240 } as const;
 export const INSPECTOR_WIDTH = { min: 256, max: 640, default: 320 } as const;
-const WIDTH_KEYS = { sidebar: "promptgraph.sidebarWidth", inspector: "promptgraph.inspectorWidth" } as const;
+const WIDTH_KEYS = { inspector: "promptgraph.inspectorWidth" } as const;
 
 export function clampWidth(px: number, bounds: { min: number; max: number }): number {
   return Math.round(Math.max(bounds.min, Math.min(px, bounds.max)));
@@ -91,7 +84,7 @@ export function clampDrawerHeight(px: number, viewport: number): number {
   return Math.round(Math.max(MIN_DRAWER_HEIGHT, Math.min(px, Math.max(MIN_DRAWER_HEIGHT, viewport - 160))));
 }
 
-/** One per view (DESIGN §13.4). Sidebar widths are global preferences, read from localStorage at creation. */
+/** One per view (DESIGN §13.4). The inspector width is a global preference, read from localStorage at creation. */
 export function createViewUiStore(): ViewUiStoreApi {
   return createStore<UiStore>()((set, get) => ({
     terminalTabs: [],
@@ -101,9 +94,7 @@ export function createViewUiStore(): ViewUiStoreApi {
     diffTarget: null,
     tabMeta: {},
     drawerOpen: false,
-    sidebarOpen: true,
     inspectorOpen: true,
-    sidebarWidth: loadWidth(WIDTH_KEYS.sidebar, SIDEBAR_WIDTH),
     inspectorWidth: loadWidth(WIDTH_KEYS.inspector, INSPECTOR_WIDTH),
     revealNodeId: null,
     fitRequest: 0,
@@ -163,18 +154,8 @@ export function createViewUiStore(): ViewUiStoreApi {
     },
 
 
-    setSidebarOpen(open) {
-      set({ sidebarOpen: open });
-    },
-
     setInspectorOpen(open) {
       set({ inspectorOpen: open });
-    },
-
-    setSidebarWidth(px) {
-      const sidebarWidth = clampWidth(px, SIDEBAR_WIDTH);
-      set({ sidebarWidth });
-      saveWidth(WIDTH_KEYS.sidebar, sidebarWidth);
     },
 
     setInspectorWidth(px) {

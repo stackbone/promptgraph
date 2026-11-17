@@ -204,10 +204,15 @@ export function canRedo(s: HistoryView): boolean {
   return !isReadOnly(s) && !s.discarded && s.future.length > 0;
 }
 
+/**
+ * The editor's validation. An empty graph is where every graph starts, not a problem to show: `empty_graph` is left
+ * out here (Run is disabled with "Add nodes first" instead), while the server still refuses to run an empty graph.
+ */
 function validate(graph: Graph | null, s: EditorValidation): ValidationResult {
   if (!graph) return EMPTY_VALIDATION;
   try {
-    return validateGraph(graph, { phase: s.phase, ...(s.supportedNodeTypes ? { supportedNodeTypes: s.supportedNodeTypes } : {}) });
+    const result = validateGraph(graph, { phase: s.phase, ...(s.supportedNodeTypes ? { supportedNodeTypes: s.supportedNodeTypes } : {}) });
+    return { ...result, errors: result.errors.filter((e) => e.code !== "empty_graph") };
   } catch (err) {
     return { errors: [{ code: "invalid_config", message: `Validator crashed: ${errorMessage(err)}` }], warnings: [] };
   }

@@ -183,7 +183,6 @@ async function main() {
     const page = await context.newPage();
     page.on("pageerror", (e) => log("page error:", e.message));
     await page.goto(await server.loginUrl());
-    await page.getByRole("tab", { name: "Nodes" }).click();
     await page.locator('.react-flow__node[data-id="pr"]').waitFor();
     await page.evaluate(() => document.activeElement?.blur());
 
@@ -284,9 +283,6 @@ async function main() {
     await sleep(400);
     await clickOn(page.getByRole("button", { name: "Run", exact: true }), { ms: 700 });
     mark("run");
-    // More room for the run: fold the left panel away.
-    await sleep(500);
-    await clickOn(page.getByRole("button", { name: "Collapse sidebar" }), { ms: 500 });
     const { runs } = await until("the run to start", async () => {
       const r = await api("GET", `/runs?graph=${GRAPH.id}&limit=1`);
       return r.runs.length ? r : null;

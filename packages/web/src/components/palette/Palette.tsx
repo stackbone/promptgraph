@@ -1,14 +1,72 @@
 import { LAYOUT_DY, type NodeType } from "@promptgraph/shared";
+import { useState } from "react";
 import { NODE_TYPE_META, PALETTE_ORDER } from "../../lib/node-meta";
+import { cn } from "@/lib/utils";
 import { useEditor, useRun, useView } from "../../store/view/context";
 import { isReadOnly } from "../../store/view/editor-store";
 import { PALETTE_MIME } from "../canvas/Canvas";
 import { Badge } from "@/components/ui/badge";
-import { NodeTypeIcon } from "../common/icons";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Icons, NodeTypeIcon } from "../common/icons";
 import { Button } from "../common/ui";
 
+/**
+ * The toolbar's Nodes button (§13): opens the palette above the toolbar. A click on a node type adds it and closes
+ * the menu; dragging one hides the menu (so the drop lands on the canvas underneath) and closes it once dropped.
+ * Disabled while nothing can be added: no graph, a load error, or a run shown on the canvas.
+ */
+export function NodesMenu() {
+  const runMode = useRun((s) => s.selectedRunId !== null);
+  const readOnly = useEditor(isReadOnly) || runMode;
+  const [open, setOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const label = runMode ? "Viewing a run: switch to the editor to add nodes" : readOnly ? "This graph cannot be edited" : "Add a node";
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setDragging(false);
+      }}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* A disabled button gets no pointer events: the wrapper keeps the tooltip working. */}
+          <span className="inline-flex">
+            <PopoverTrigger asChild>
+              <Button variant={open ? "secondary" : "ghost"} size="icon" aria-label="Nodes" disabled={readOnly}>
+                <Icons.plus />
+              </Button>
+            </PopoverTrigger>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={10}
+        aria-label="Nodes"
+        // Hidden (not unmounted) while a node type is dragged out of it: the drag source must stay in the DOM.
+        className={cn("nokey max-h-[min(32rem,70vh)] w-80 overflow-y-auto p-0", dragging && "pointer-events-none opacity-0")}
+      >
+        <Palette
+          onAdded={() => setOpen(false)}
+          // Deferred: the browser takes the drag image from the element as it is when the drag starts.
+          onDragStart={() => requestAnimationFrame(() => setDragging(true))}
+          onDragEnd={() => {
+            setDragging(false);
+            setOpen(false);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** Node types to drag onto the canvas (click adds one below the last node). */
-export function Palette() {
+export function Palette({ onAdded, onDragStart, onDragEnd }: { onAdded?(): void; onDragStart?(): void; onDragEnd?(): void } = {}) {
   const view = useView();
   // A run shown on the canvas is its snapshot: nothing can be added to it.
   const runMode = useRun((s) => s.selectedRunId !== null);
@@ -33,6 +91,7 @@ export function Palette() {
     const last = g.nodes.reduce((m, n) => (n.position.y > m.y ? n.position : m), { x: 96, y: -LAYOUT_DY });
     const id = view.editor.getState().addNode(type, { x: last.x, y: last.y + LAYOUT_DY });
     if (id) view.ui.getState().revealNode(id);
+    onAdded?.();
   };
 
   return (
@@ -52,7 +111,9 @@ export function Palette() {
             onDragStart={(e) => {
               e.dataTransfer.setData(PALETTE_MIME, type);
               e.dataTransfer.effectAllowed = "copy";
+              onDragStart?.();
             }}
+            onDragEnd={() => onDragEnd?.()}
             onClick={() => addByClick(type)}
             title={
               needsPhase2

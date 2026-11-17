@@ -263,7 +263,6 @@ function makeScenes({ api, page, outDir, server, root, env }) {
   async function openGraph(id) {
     // Every view has a URL (DESIGN §13.2); the session cookie from the login keeps the page signed in.
     await page.goto(`${server.base}/r/${encodeURIComponent(server.repoId)}/graphs/${encodeURIComponent(id)}`);
-    await page.getByRole("tab", { name: "Nodes" }).click();
     await blur();
     await node(GRAPHS[id].nodes[0].id).waitFor();
     // Validation has run: either no problems, or the problems button ("1 warning", "2 errors").

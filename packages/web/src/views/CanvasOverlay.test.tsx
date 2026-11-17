@@ -28,7 +28,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("canvas overlay: run menu and linked issues (DESIGN §13.2, §24.3)", () => {
+describe("canvas overlay: linked issues (DESIGN §24.3)", () => {
   it("shows the linked issue with its current state as a link to Linear", async () => {
     const view = createTestView({ graphId: "g1", graphs: [], path: "/r/repo-0123abcd/graphs/g1" });
     view.editor.setState({ graph: { ...graphOf({ id: "g1", name: "ENG-9 Ship it" }), issues: [ISSUE] }, loading: false, loadError: null, activeRunId: null });
@@ -49,11 +49,11 @@ describe("canvas overlay: run menu and linked issues (DESIGN §13.2, §24.3)", (
     expect(group).toBeTruthy();
   });
 
-  it("shows the run menu (Editor) at the top left and no graph menu", () => {
+  it("leaves the run menu (Editor) to the canvas toolbar and shows no graph menu", () => {
     const view = createTestView({ graphId: "g1", graphs: [], path: "/r/repo-0123abcd/graphs/g1" });
     view.editor.setState({ graph: graphOf({ id: "g1", name: "Plain" }), loading: false, loadError: null, activeRunId: null });
     view.render(<CanvasOverlay />);
-    expect(screen.getByRole("button", { name: /Editor/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Editor/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Plain/ })).toBeNull();
   });
 

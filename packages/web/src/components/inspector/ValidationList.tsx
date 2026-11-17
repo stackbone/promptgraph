@@ -4,24 +4,27 @@ import { cn } from "@/lib/utils";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 
-/** Errors (block Run) and warnings (informational); clicking an issue selects its node/edge. */
-export function ValidationList({ validation }: { validation: ValidationResult }) {
+/**
+ * Errors (block Run) and warnings (informational); clicking an issue selects its node/edge, then calls `onSelect`
+ * (the problems popover closes itself with it).
+ */
+export function ValidationList({ validation, onSelect }: { validation: ValidationResult; onSelect?: () => void }) {
   if (!validation.errors.length && !validation.warnings.length) {
     return <p className="text-xs text-green-600/90">No problems found.</p>;
   }
   return (
     <ul className="space-y-1">
       {validation.errors.map((i, n) => (
-        <IssueRow key={`e${n}`} issue={i} tone="error" />
+        <IssueRow key={`e${n}`} issue={i} tone="error" onSelect={onSelect} />
       ))}
       {validation.warnings.map((i, n) => (
-        <IssueRow key={`w${n}`} issue={i} tone="warning" />
+        <IssueRow key={`w${n}`} issue={i} tone="warning" onSelect={onSelect} />
       ))}
     </ul>
   );
 }
 
-function IssueRow({ issue, tone }: { issue: ValidationIssue; tone: "error" | "warning" }) {
+function IssueRow({ issue, tone, onSelect }: { issue: ValidationIssue; tone: "error" | "warning"; onSelect?: () => void }) {
   const view = useView();
   const target = issue.nodeId || issue.edgeId;
   return (
@@ -30,7 +33,10 @@ function IssueRow({ issue, tone }: { issue: ValidationIssue; tone: "error" | "wa
         variant="ghost"
         size="sm"
         disabled={!target}
-        onClick={() => view.editor.getState().setSelection(issue.nodeId ? [issue.nodeId] : [], issue.edgeId ? [issue.edgeId] : [])}
+        onClick={() => {
+          view.editor.getState().setSelection(issue.nodeId ? [issue.nodeId] : [], issue.edgeId ? [issue.edgeId] : []);
+          onSelect?.();
+        }}
         className={cn(
           "h-auto w-full items-start justify-start gap-2 rounded-md px-2 py-1.5 text-left text-xs font-normal whitespace-normal hover:bg-accent disabled:opacity-100",
           tone === "error" ? "text-red-700 hover:text-red-700" : "text-amber-700 hover:text-amber-700",

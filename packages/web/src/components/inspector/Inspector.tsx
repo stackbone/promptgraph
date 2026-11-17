@@ -42,7 +42,6 @@ export function Inspector() {
 function EditInspector() {
   const view = useView();
   const graph = useEditor((s) => s.graph);
-  const validation = useEditor((s) => s.validation);
   const selectedNodeIds = useEditor((s) => s.selectedNodeIds);
   const selectedEdgeIds = useEditor((s) => s.selectedEdgeIds);
   const nodeId = useEditor((s) => s.selectedNodeId);
@@ -76,9 +75,6 @@ function EditInspector() {
   }
   return (
     <>
-      <Section title={`Problems${validation.errors.length + validation.warnings.length ? ` (${validation.errors.length + validation.warnings.length})` : ""}`}>
-        <ValidationList validation={validation} />
-      </Section>
       <Section title="Graph settings">
         {graphLocked && !readOnly && <p className="mb-2 text-[11px] text-muted-foreground">Fixed while a run of this graph is active.</p>}
         <GraphNameField key={graph.name} name={graph.name} graphId={graph.id} disabled={graphLocked} onRename={(name) => view.editor.getState().rename(name)} />

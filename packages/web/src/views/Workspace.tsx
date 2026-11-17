@@ -1,5 +1,5 @@
 import { webRoutes } from "@promptgraph/shared";
-import { PanelLeftIcon, PanelRightIcon } from "lucide-react";
+import { PanelRightCloseIcon, PanelRightOpenIcon } from "lucide-react";
 import { Suspense, lazy, useState, type CSSProperties, type ReactNode } from "react";
 import { Canvas } from "../components/canvas/Canvas";
 import { Banners } from "../components/common/Banners";
@@ -7,13 +7,13 @@ import { NewGraphDialog } from "../components/home/RepoDialogs";
 import { Icons } from "../components/common/icons";
 import { Button } from "../components/common/ui";
 import { LinearIssueLinks } from "../components/common/LinearIssueLink";
-import { RunControls, RunSelector, SaveIndicator } from "../components/header/RunControls";
+import { SaveIndicator } from "../components/header/RunControls";
 import { Inspector } from "../components/inspector/Inspector";
-import { Palette } from "../components/palette/Palette";
 import { RunReport, useAutoOpenReport } from "../components/report/RunReport";
 import { TerminalDrawer } from "../components/terminal/TerminalDrawer";
+import { CanvasToolbar } from "../components/toolbar/CanvasToolbar";
 import { Button as IconButton } from "../components/ui/button";
-import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider, SidebarRail } from "../components/ui/sidebar";
+import { Sidebar, SidebarProvider, SidebarRail } from "../components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import type { RepoRoute } from "../lib/router/routes";
 import { createGraph } from "../store/view/actions";
@@ -25,54 +25,47 @@ const ApprovalDialog = lazy(() => import("../components/approval/ApprovalDialog"
 const DiffDialog = lazy(() => import("../components/approval/DiffDialog").then((m) => ({ default: m.DiffDialog })));
 
 /**
- * Graph editor and run views (§13): banners / palette | canvas | inspector / terminal drawer. There is no top bar:
- * graphs are picked in the overview (§13.3), and the run menu and the linked issues float over the canvas
+ * Graph editor and run views (§13): banners / canvas | inspector / terminal drawer. There is no top bar and no left
+ * sidebar: graphs are picked in the overview (§13.3), the canvas toolbar at the bottom of the canvas holds the node
+ * palette, the run menu and the run controls (CanvasToolbar), and the linked issues float over the canvas
  * (CanvasOverlay). The report route replaces the canvas row (which stays mounted) with the run report.
  */
 export function Workspace({ route }: { route: RepoRoute }) {
   const ui = useView().ui;
-  const sidebarOpen = useViewUi((s) => s.sidebarOpen);
-  const sidebarWidth = useViewUi((s) => s.sidebarWidth);
   const inspectorOpen = useViewUi((s) => s.inspectorOpen);
   const inspectorWidth = useViewUi((s) => s.inspectorWidth);
   const reportRunId = route.kind === "report" ? route.runId : null;
   useAutoOpenReport(route);
 
-  // Two shadcn sidebar providers, one per side (a provider drives a single sidebar): the outer one wraps the whole
-  // shell for the left sidebar (palette / runs), the inner one wraps the canvas and the right sidebar (inspector).
-  // Each collapses from its edge rail, which also resizes it when dragged; the canvas shows the expand buttons.
+  // The shadcn sidebar provider wraps the canvas and the right sidebar (inspector), which collapses from its edge
+  // rail (that also resizes it when dragged) or from the toggle at the canvas's top right.
   return (
-    <SidebarProvider
-      open={sidebarOpen}
-      onOpenChange={(open) => ui.getState().setSidebarOpen(open)}
-      className="min-h-0 flex-1 flex-col bg-background text-foreground"
-      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
-    >
+    <div className="flex min-h-0 w-full flex-1 flex-col bg-background text-foreground">
       <Banners />
       {reportRunId && <RunReport runId={reportRunId} />}
-      {/* `relative` + `overflow-hidden`: the left Sidebar is positioned against this row (not the viewport), so it
-          always sits below any banners, and slides out of view when collapsed. */}
+      {/* `relative` + `overflow-hidden`: the inspector is positioned against this row (not the viewport), so it always
+          sits below any banners, and slides out of view when collapsed. */}
       <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
-        <LeftSidebar />
         <SidebarProvider
-            open={inspectorOpen}
-            onOpenChange={(open) => ui.getState().setInspectorOpen(open)}
-            className="relative min-h-0 min-w-0 flex-1"
-            style={{ "--sidebar-width": `${inspectorWidth}px` } as CSSProperties}
-          >
-            <main className="relative flex min-w-0 flex-1 flex-col">
-              <CanvasOverlay />
-              <div className="min-h-0 flex-1">
-                <CanvasArea />
-              </div>
-              <TerminalDrawer />
-            </main>
-            <RightSidebar />
+          open={inspectorOpen}
+          onOpenChange={(open) => ui.getState().setInspectorOpen(open)}
+          className="relative min-h-0 min-w-0 flex-1"
+          style={{ "--sidebar-width": `${inspectorWidth}px` } as CSSProperties}
+        >
+          <main className="relative flex min-w-0 flex-1 flex-col">
+            <CanvasOverlay />
+            <div className="relative min-h-0 flex-1">
+              <CanvasArea />
+              <CanvasToolbar />
+            </div>
+            <TerminalDrawer />
+          </main>
+          <RightSidebar />
         </SidebarProvider>
       </div>
       <ApprovalGate />
       <DiffGate />
-    </SidebarProvider>
+    </div>
   );
 }
 
@@ -97,23 +90,18 @@ function DiffGate() {
 }
 
 /**
- * A sidebar toggle with a tooltip; aria-label names the action (collapse inside the sidebar, expand outside).
- * It reads the view's UI store rather than useSidebar(): the canvas sits inside the inspector's provider, so the
- * nearest sidebar context there is the right one even for the left sidebar's expand button.
+ * The inspector's collapse / expand button, always at the top right of the canvas (just left of the inspector's top),
+ * so it never moves or disappears; only its icon and label follow the inspector's state.
  */
-function SidebarToggle({ side, label, className }: { side: "left" | "right"; label: string; className?: string }) {
+function InspectorToggle({ className }: { className?: string }) {
   const { ui } = useView();
-  const open = useViewUi((s) => (side === "left" ? s.sidebarOpen : s.inspectorOpen));
-  const toggle = () => {
-    const s = ui.getState();
-    if (side === "left") s.setSidebarOpen(!open);
-    else s.setInspectorOpen(!open);
-  };
+  const open = useViewUi((s) => s.inspectorOpen);
+  const label = open ? "Collapse inspector" : "Expand inspector";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <IconButton variant="ghost" size="icon-sm" aria-label={label} aria-expanded={open} className={className} onClick={toggle}>
-          {side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
+        <IconButton variant="ghost" size="icon-sm" aria-label={label} aria-expanded={open} className={className} onClick={() => ui.getState().setInspectorOpen(!open)}>
+          {open ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
         </IconButton>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
@@ -124,27 +112,23 @@ function SidebarToggle({ side, label, className }: { side: "left" | "right"; lab
 const FLOATING = "bg-card shadow-soft ring-1 ring-border";
 
 /**
- * Controls floating over the top corners of the canvas. Top left: the left sidebar's expand button while it is
- * collapsed, the run menu (the editor or one of the graph's runs, §13.2) and the graph's linked Linear issues (§24.3).
- * Top right: the autosave indicator, the run controls (problems, Run / Cancel, …) and the inspector's expand button.
- * The save indicator sits left of Run so that appearing and disappearing never shifts the Run button.
- * The rows themselves let pointer events through, so only their buttons cover the canvas.
+ * Controls floating over the top corners of the canvas. Top left: the graph's linked Linear issues (§24.3). Top
+ * right: the autosave indicator and the inspector's collapse / expand button (always shown). Everything else sits in
+ * the canvas toolbar at the bottom (CanvasToolbar). The rows themselves let pointer events through, so only their
+ * contents cover the canvas.
  */
 export function CanvasOverlay() {
-  const sidebarOpen = useViewUi((s) => s.sidebarOpen);
-  const inspectorOpen = useViewUi((s) => s.inspectorOpen);
   const issues = useEditor((s) => s.graph?.issues);
   return (
     <>
-      <div className="pointer-events-none absolute top-2 left-2 z-10 flex max-w-[calc(100%-34rem)] min-w-0 items-center gap-2 *:pointer-events-auto">
-        {!sidebarOpen && <SidebarToggle side="left" label="Expand sidebar" className={FLOATING} />}
-        <RunSelector className={FLOATING} />
-        {issues?.length ? <LinearIssueLinks issues={issues} variant="canvas" className="min-w-0" /> : null}
-      </div>
+      {issues?.length ? (
+        <div className="pointer-events-none absolute top-2 left-2 z-10 flex max-w-[calc(100%-20rem)] min-w-0 items-center gap-2 *:pointer-events-auto">
+          <LinearIssueLinks issues={issues} variant="canvas" className="min-w-0" />
+        </div>
+      ) : null}
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-2 *:pointer-events-auto">
         <SaveIndicator />
-        <RunControls />
-        {!inspectorOpen && <SidebarToggle side="right" label="Expand inspector" className={FLOATING} />}
+        <InspectorToggle className={FLOATING} />
       </div>
     </>
   );
@@ -153,35 +137,14 @@ export function CanvasOverlay() {
 function RightSidebar() {
   const { ui } = useView();
   return (
-    // Re-anchored to its provider's (relative) wrapper like the left sidebar. nokey: Backspace/Delete on the
+    // shadcn's desktop sidebar container is `fixed inset-y-0 h-svh`; it is re-anchored to its provider's (relative)
+    // wrapper with `absolute h-full` because the banners above it have no fixed height. nokey: Backspace/Delete on the
     // inspector's buttons, checkboxes and tabs must not delete canvas items.
     <Sidebar side="right" collapsible="offcanvas" className="nokey absolute h-full">
       <div className="min-h-0 flex-1">
         <Inspector />
       </div>
       <SidebarRail aria-label="Collapse or resize inspector" title="Click to collapse, drag to resize" onResize={(px) => ui.getState().setInspectorWidth(px)} />
-    </Sidebar>
-  );
-}
-
-/** The left sidebar: the node palette (runs are picked in the header's run menu, §13.2). */
-function LeftSidebar() {
-  const view = useView();
-  const title = "Nodes";
-  return (
-    // shadcn's desktop sidebar container is `fixed inset-y-0 h-svh`; it is re-anchored to the (relative) layout row
-    // with `absolute h-full` because the header + banners above it have no fixed height.
-    <Sidebar collapsible="offcanvas" className="nokey absolute h-full">
-      <section aria-label={title} className="flex min-h-0 flex-1 flex-col">
-        <SidebarHeader className="flex-row items-center gap-1 border-b py-1.5">
-          <h2 className="min-w-0 flex-1 truncate px-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title}</h2>
-          <SidebarToggle side="left" label="Collapse sidebar" />
-        </SidebarHeader>
-        <SidebarContent className="min-h-0">
-          <Palette />
-        </SidebarContent>
-      </section>
-      <SidebarRail aria-label="Collapse or resize sidebar" title="Click to collapse, drag to resize" onResize={(px) => view.ui.getState().setSidebarWidth(px)} />
     </Sidebar>
   );
 }
