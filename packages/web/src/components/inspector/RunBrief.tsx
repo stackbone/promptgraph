@@ -11,7 +11,7 @@ const EMPTY: RunBriefEntry[] = [];
 
 /** Dot colour of an entry: how its step (NodeStatus) or the run (RunStatus) ended. */
 function outcomeDot(entry: RunBriefEntry): string {
-  if (entry.kind === "run") return RUN_STATUS_STYLE[entry.outcome as RunStatus]?.dot ?? "bg-muted-foreground";
+  if (entry.kind !== "node") return RUN_STATUS_STYLE[entry.outcome as RunStatus]?.dot ?? "bg-muted-foreground";
   return NODE_STATUS_STYLE[entry.outcome as NodeStatus]?.dot ?? "bg-muted-foreground";
 }
 
@@ -57,15 +57,55 @@ export function BriefTimeline({ entries, step }: { entries: readonly RunBriefEnt
 }
 
 /**
- * The run brief in the run inspector (nothing selected): follows the run live (`brief:update`). Clicking a step's
+ * The run's current status in the run inspector (DESIGN §13.6, brief entries of kind "status"): the newest ready
+ * one, rewritten after every step; *Updating…* while a newer one is being written. Renders nothing before the
+ * first one.
+ */
+export function RunStatusBrief() {
+  const entries = useRun((s) => s.detail?.brief ?? EMPTY);
+  const statuses = entries.filter((e) => e.kind === "status");
+  const current = statuses.filter((e) => e.status === "ready").at(-1);
+  const updating = statuses.at(-1)?.status === "pending";
+  if (!current && !updating) return null;
+  return (
+    <Section title="Status">
+      <div className="rounded-md border border-border bg-muted/40 px-3 py-2" data-testid="brief-status" aria-label="Run status">
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          {current && <span className={`size-2 shrink-0 rounded-full ${outcomeDot(current)}`} />}
+          <span className="font-semibold text-foreground/80">Now</span>
+          {updating ? (
+            <span className="ml-auto flex items-center gap-1">
+              <Icons.refresh className="size-3 animate-spin" /> Updating…
+            </span>
+          ) : (
+            current && <span className="ml-auto shrink-0 tabular-nums">{formatTime(current.updatedAt)}</span>
+          )}
+        </div>
+        {current ? (
+          <>
+            <p className="mt-0.5 text-sm font-medium text-foreground">{current.title}</p>
+            {current.summary && <Markdown text={current.summary} className="mt-1 text-xs! text-foreground/85" />}
+          </>
+        ) : (
+          <p className="mt-0.5 text-xs text-muted-foreground">Writing the status…</p>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * The run brief in the run inspector (nothing selected): the timeline of the steps and the closing entry (the
+ * current status is RunStatusBrief, above the usage); follows the run live (`brief:update`). Clicking a step's
  * name selects its node.
  */
 export function RunBrief() {
   const view = useView();
   const enabled = useRun((s) => s.detail?.run.graphSnapshot.settings.brief.enabled ?? false);
   const nodes = useRun((s) => s.detail?.run.graphSnapshot.nodes);
-  const entries = useRun((s) => s.detail?.brief ?? EMPTY);
-  if (!enabled && entries.length === 0) {
+  const all = useRun((s) => s.detail?.brief ?? EMPTY);
+  const entries = all.filter((e) => e.kind !== "status");
+  if (!enabled && all.length === 0) {
     return (
       <Section title="Brief">
         <p className="text-xs text-muted-foreground">
