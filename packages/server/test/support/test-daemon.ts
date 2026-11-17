@@ -37,6 +37,7 @@ const ENGINE_METHODS = [
   "closeReopenedSession",
   "resumeRun",
   "supportedNodeTypes",
+  "validationOptions",
   "handleUserInput",
   "prune",
   "shutdown",
@@ -52,6 +53,7 @@ export function mockEngine(): EngineMock {
   engine.activeRunForGraph.mockReturnValue(null);
   for (const m of ["cancelRun", "cleanupRun", "deleteRun", "resumeRun", "prune", "shutdown", "drain", "whenEditable"] as const) engine[m].mockResolvedValue(undefined);
   engine.supportedNodeTypes.mockReturnValue(["prompt", "command", "shell", "commit"]);
+  engine.validationOptions.mockImplementation(() => ({ phase: 1, supportedNodeTypes: engine.supportedNodeTypes() }));
   return engine;
 }
 

@@ -53,7 +53,7 @@ class MergeAllRunner implements Runner {
   }
 }
 
-function setup(keepWorktrees: KeepWorktrees, workspaceSetup?: string) {
+function setup(keepWorktrees: KeepWorktrees, workspaceSetup?: string, laneSetup?: () => { copyFiles: string[]; setup?: string }) {
   const { repo, cleanup } = createTempRepo();
   const home = tempDir();
   cleanups.push(cleanup, home.cleanup);
@@ -81,6 +81,7 @@ function setup(keepWorktrees: KeepWorktrees, workspaceSetup?: string) {
     phase: 1,
     env: process.env,
     stopTimeoutMs: 500,
+    laneSetup,
   });
   // Lets finalize/cleanup chains finish before the database closes.
   cleanups.push(() => engine.shutdown());
@@ -109,6 +110,24 @@ function setup(keepWorktrees: KeepWorktrees, workspaceSetup?: string) {
 }
 
 describe("Engine lanes with real git worktrees", () => {
+  it("copies the repository's local files into each new lane, then runs the repository's setup (§25.6)", async () => {
+    const setupLog = path.join(tempDir().dir, "setup.log");
+    cleanups.push(() => fs.rmSync(path.dirname(setupLog), { recursive: true, force: true }));
+    const s = setup("never", undefined, () => ({ copyFiles: [".env", "missing.env"], setup: `cat .env >> '${setupLog}'` }));
+    fs.writeFileSync(path.join(s.repo, ".gitignore"), ".env\n");
+    s.git(s.repo, "add", ".gitignore");
+    s.git(s.repo, "-c", "user.email=t@example.test", "-c", "user.name=t", "commit", "-qm", "ignore env");
+    fs.writeFileSync(path.join(s.repo, ".env"), "SECRET=1\n");
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => s.store.getRun(run.id)!.cleanedUp, 10_000);
+    expect(s.store.getRun(run.id)!.status).toBe("succeeded");
+    // Both lanes (main and the fork) got the file before their setup ran.
+    expect(fs.readFileSync(setupLog, "utf8").trim().split("\n")).toEqual(["SECRET=1", "SECRET=1"]);
+    const copied = s.store.listEvents(run.id).filter((e) => e.type === "lane.files_copied");
+    expect(copied).toHaveLength(2);
+    expect(copied[0]!.payload).toMatchObject({ copied: [".env"], missing: ["missing.env"] });
+  });
+
   it("forks after a checkpoint, sets up each new lane, merges and cleans up merged branches", async () => {
     const setupLog = path.join(tempDir().dir, "setup.log");
     cleanups.push(() => fs.rmSync(path.dirname(setupLog), { recursive: true, force: true }));

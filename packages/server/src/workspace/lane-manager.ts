@@ -37,6 +37,8 @@ export interface LaneManagerDeps {
   bus: EventBus;
   paths: PgPaths;
   repo: RepoRef;
+  /** Called before a lane's worktree is removed (cleanup): stops the processes still running in it (§25.7). */
+  beforeRemove?: (lane: Lane) => Promise<void>;
 }
 
 export type MergeAttempt =
@@ -277,6 +279,7 @@ export class LaneManager {
       await this.withLaneLock(lane, () =>
         this.withLaneLock(REPO_LOCK, async () => {
           if (fs.existsSync(lane.worktreePath)) {
+            await this.deps.beforeRemove?.(lane).catch(() => undefined);
             await gitOk(repo.path, ["worktree", "remove", "--force", lane.worktreePath]);
           }
           if (!lane.pushed && (lane.status === "merged" || !(await hasOwnCommits(repo.path, lane)))) {

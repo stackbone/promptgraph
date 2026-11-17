@@ -37,11 +37,13 @@ To change a graph that already exists, use patch_graph with ops (add_node, updat
 | prompt | \`prompt\` (required), \`context\`, \`model\`, \`effort\`, \`permissionMode\`, \`allowedTools\`, \`completion\` | Interactive Claude Code session in the lane's worktree. Output = last assistant message |
 | command | \`command\` (e.g. "/code-review high"), same options as prompt | Runs a slash command or skill (list_commands shows what exists) |
 | shell | \`run\` (required), \`timeoutSec\`, \`env\` | \`sh -c\` in the worktree. Fails on non-zero exit. Output = exit code + last 200 lines |
+| test | \`checks\` (ids from get_repo_settings; absent = all), \`continueOnFailure\` (default true) | Runs the repository's configured tests and checks in the worktree, in order. Succeeds when all pass; output = one result per check + last 200 lines. Only runnable when get_repo_settings lists checks |
+| app | \`appId\` (from get_repo_settings; absent = the first app), \`readyTimeoutSec\` (default 180) | Starts one of the repository's configured apps in the worktree and succeeds once it is reachable; output = its URL. It keeps running for the next steps until the run ends. Only runnable when get_repo_settings lists apps |
 | commit | \`message\` (used when \`generateMessage\` is false), \`generateMessage\` (default true), \`squashCheckpoints\` (default true) | Commits the lane's changes |
 | pr | \`title\`, \`body\` (generated when absent), \`draft\` (default true), \`base\`, \`requireApproval\` (default true) | Pushes the lane branch and opens a PR with gh, after a human approval |
 | approval | \`message\`, \`showDiff\` (default true) | Pauses until the user approves or rejects in the UI |
 | merge | \`strategy\`: merge \\| squash, \`onConflict\`: claude \\| pause | Joins 2+ lanes. The only node that may have several inputs from parallel lanes |
-| condition | \`evaluator\`: {"kind":"exitCode","equals":0} \\| {"kind":"regex","pattern":"…","flags":""} \\| {"kind":"judge","question":"…"} | Routes to its \`true\` / \`false\` output ports. Evaluates its predecessor's output; exitCode needs a shell predecessor |
+| condition | \`evaluator\`: {"kind":"exitCode","equals":0} \\| {"kind":"regex","pattern":"…","flags":""} \\| {"kind":"judge","question":"…"} | Routes to its \`true\` / \`false\` output ports. Evaluates its predecessor's output; exitCode needs a shell or test predecessor |
 | linear | \`prompt\` (instructions; default: update the linked issues' progress), \`allowComments\` (default true), \`allowStateChanges\` (default true), \`model\`, \`timeoutSec\` | Claude proposes a progress comment and/or a new state for each Linear issue linked to the graph (graph \`issues\`, set in the UI); the user approves (and may edit) them in the UI, then promptgraph applies them. Needs Linear connected in the UI's settings |
 
 Claude node options:
@@ -66,6 +68,15 @@ Every node: \`id\` (unique), \`type\`, \`label\` (shown on the canvas), \`config
   Removing loop edges must leave a DAG. Loop back to the shell (or the step producing the output), not
   to an exitCode/regex condition.
 
+## Verifying work
+
+Call get_repo_settings first. When it lists checks, verify with a \`test\` node (place it after the work, before
+commit/pr), and use its result in a test-fix loop: \`test\` →(always) condition exitCode=0 → true: continue, false: fix
+prompt → loop back to the \`test\` node. Do not write "then run the tests" into a prompt instead: the run cannot see
+that result, and the step cannot fail on it. Use a \`shell\` node only for a command the settings do not have. To
+check a running app (e2e, screenshots), put an \`app\` node before the step that uses it and give that step the URL
+from the app node's output (it is in the context of a fresh prompt).
+
 ## Rules the validator enforces
 
 - No cycles except marked loop edges; no self loops; no duplicate edges.
@@ -73,14 +84,17 @@ Every node: \`id\` (unique), \`type\`, \`label\` (shown on the canvas), \`config
   Mutually exclusive inputs (true/false branches of one condition) may join without a merge.
 - \`context: "resume"\` needs exactly one Claude predecessor in the same lane.
 - \`pr\` requires approval unless the graph sets \`settings.allowPrWithoutApproval\`; do not set it unless the user asks.
+- \`app\` / \`test\` nodes need the repository settings to name an app / a check (\`repo_command_missing\`).
 - Warnings (not blocking): no commit before pr/merge, empty labels.
 
 ## Patterns
 
-Linear: prompt → shell (tests) → commit → pr
-Fan-out: prompt A and prompt B from one root (two lanes) → merge → shell (tests) → commit
-Test-fix loop: prompt implement → shell test →(always) condition exitCode=0 —true→ commit; —false→ prompt fix
-  (context resume) —loop(max 3)→ shell test
+Linear: prompt → test → commit → pr
+Fan-out: prompt A and prompt B from one root (two lanes) → merge → test → commit
+Test-fix loop: prompt implement → test →(always) condition exitCode=0 —true→ commit; —false→ prompt fix
+  (context resume) —loop(max 3)→ test
+  (use a shell node with the test command instead only when get_repo_settings lists no checks)
+Check the running app: prompt implement → app → prompt "open the URL from the previous step and check …" → commit
 Review loop: prompt implement → command "/code-review" → condition judge "Are there blocking issues?"
   —false→ commit; —true→ prompt "address the review findings" —loop(max 2)→ command "/code-review"
 `;

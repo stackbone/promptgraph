@@ -13,6 +13,7 @@ import {
   type DiffResponse,
   type GetGraphResponse,
   type ListCommandsResponse,
+  type RepoSettingsResponse,
   type ListGraphsResponse,
   type ListRunsResponse,
   type NodeRunResponse,
@@ -411,6 +412,34 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       const q = query?.toLowerCase();
       const hits = q ? commands.filter((c) => `${c.name} ${c.description ?? ""}`.toLowerCase().includes(q)) : commands;
       return json({ total: hits.length, commands: hits.slice(0, 80).map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint, source: c.source })) });
+    }),
+  );
+
+  server.registerTool(
+    "get_repo_settings",
+    {
+      title: "Repository apps and tests",
+      description:
+        "How this repository's applications start and how its tests and checks run (the repository settings, set up in the UI " +
+        "or by its analysis). `test` nodes run these checks and `app` nodes start these apps: when `checks` is not empty, verify " +
+        "work with a `test` node instead of asking a prompt to run tests. Empty lists mean those node types cannot run yet.",
+      inputSchema: { ...repoArg },
+      annotations: READ,
+    },
+    guarded(async ({ repo }) => {
+      const c = await conn(repo);
+      const state = await c.client.get<RepoSettingsResponse>(c.api.settings);
+      return json({
+        configured: state.exists && !state.error,
+        error: state.error,
+        apps: state.settings.apps.map((a) => ({ id: a.id, name: a.name, run: a.run, cwd: a.cwd || ".", url: a.url ?? null })),
+        checks: state.settings.checks.map((ch) => ({ id: ch.id, name: ch.name, run: ch.run, cwd: ch.cwd || ".", timeoutSec: ch.timeoutSec ?? null })),
+        testNodeAvailable: state.settings.checks.length > 0,
+        appNodeAvailable: state.settings.apps.length > 0,
+        worktreeSetup: state.settings.setup ?? null,
+        copiedIntoWorktrees: state.settings.copyFiles,
+        notes: state.settings.notes ?? null,
+      });
     }),
   );
 

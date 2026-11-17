@@ -43,6 +43,7 @@ import {
   type RunReportResponse,
   type RunStatus,
   type Topology,
+  type ValidateOptions,
   nodeDisplayLabel,
 } from "@promptgraph/shared";
 import { childEnv } from "../config/child-env.js";
@@ -55,6 +56,7 @@ import type { NodeControls, PredecessorOutput, RunnerContext, RunnerRegistry, Ru
 import type { NodeRunPatch, Store } from "../store/store.js";
 import { newId, newShortId } from "../util/ids.js";
 import type { LaneManager, RepoRef } from "../workspace/lane-manager.js";
+import { copyRepoFiles } from "../workspace/copy-files.js";
 import { runWorkspaceSetup } from "../workspace/setup.js";
 import { ActivationTracker, type LoopIteration } from "./activation.js";
 import type { RunBriefer } from "./brief.js";
@@ -87,6 +89,19 @@ export interface EngineDeps {
   billingMode?: () => Promise<BillingMode | null>;
   /** §13.6 run brief: told when a step finishes and when a run ends; never blocks the run. */
   brief?: Pick<RunBriefer, "nodeFinished" | "runFinished" | "shutdown">;
+  /** Ids of the repository settings' apps and checks (§25.1), validated for `app` / `test` nodes; absent = not checked. */
+  repoCommands?: () => { apps: string[]; checks: string[] };
+  /**
+   * The repository settings' lane preparation (§25.6), read when a lane is set up: files copied from the main
+   * checkout into each new worktree, and the setup command used when the graph has no `workspaceSetup`.
+   */
+  laneSetup?: () => { copyFiles: string[]; setup?: string };
+}
+
+/** What a new lane runs before its first node (§9.4, §25.6). */
+interface LanePreparation {
+  command: string | undefined;
+  copyFiles: string[];
 }
 
 /** Error with an HTTP-mappable code; routes translate it into ApiError. */
@@ -256,7 +271,7 @@ export class Engine {
       throw err;
     }
     const graph = loaded.graph;
-    const validation = validateGraph(graph, { phase: this.deps.phase, supportedNodeTypes: this.supportedNodeTypes() });
+    const validation = validateGraph(graph, this.validationOptions());
     if (validation.errors.length > 0) {
       throw new EngineError("validation_failed", `Graph "${graphId}" has validation errors`, validation);
     }
@@ -298,6 +313,22 @@ export class Engine {
   /** Node types with a registered runner (the others fail validation until their milestone lands). */
   supportedNodeTypes(): NodeType[] {
     return NODE_TYPES.filter((t) => this.deps.runners[t] !== undefined);
+  }
+
+  /** A new lane's preparation (§9.4, §25.6): the graph's `workspaceSetup`, else the repository's setup, after its files. */
+  private preparation(graph: Graph): LanePreparation {
+    const repo = this.deps.laneSetup?.();
+    return { command: graph.settings.workspaceSetup?.trim() || repo?.setup, copyFiles: repo?.copyFiles ?? [] };
+  }
+
+  private needsPreparation(graph: Graph): boolean {
+    const prep = this.preparation(graph);
+    return !!prep.command || prep.copyFiles.length > 0;
+  }
+
+  /** What a run is validated against: the phase, the runners, and the repository settings' commands (§25.3). */
+  validationOptions(): ValidateOptions {
+    return { phase: this.deps.phase, supportedNodeTypes: this.supportedNodeTypes(), repoCommands: this.deps.repoCommands?.() };
   }
 
   getRun(runId: string): RunDetail {
@@ -410,7 +441,7 @@ export class Engine {
     const nodeRuns = store.listNodeRuns(runId);
     const problems: RunEditProblem[] = checkRunEdit(before, next, nodeRuns);
     if (problems.length === 0) {
-      const validation = validateGraph(next, { phase: this.deps.phase, supportedNodeTypes: this.supportedNodeTypes() });
+      const validation = validateGraph(next, this.validationOptions());
       if (validation.errors.length > 0) {
         throw new EngineError("validation_failed", `The run keeps its graph until it is valid: ${validation.errors[0]!.message}`, validation);
       }
@@ -827,7 +858,7 @@ export class Engine {
     // A loop source finished just before the crash: its new iteration was never persisted.
     for (const it of tracker.takeRestoredLoops()) void this.startIteration(live, it);
     this.persistLoops(live);
-    if (graph.settings.workspaceSetup) {
+    if (this.needsPreparation(graph)) {
       // A lane is set up once one of its node runs completed the setup; otherwise the next node retries it.
       const setUp = new Set(store.listNodeRuns(run.id).filter((nr) => nr.laneSetup === "succeeded").map((nr) => nr.laneId));
       for (const lane of store.listLanes(run.id)) if (!setUp.has(lane.id)) live.needsSetup.add(lane.id);
@@ -908,22 +939,42 @@ export class Engine {
     const lane = await this.ensureLane(live, nodeRun.laneId);
     if (signal.aborted) return { status: "cancelled" };
 
-    const setup = live.graph.settings.workspaceSetup;
-    if (setup && live.needsSetup.delete(lane.id)) {
+    const prep = this.preparation(live.graph);
+    if ((prep.command || prep.copyFiles.length > 0) && live.needsSetup.delete(lane.id)) {
       this.patchNodeRun(nodeRun.id, { laneSetup: "running" });
-      const res = await runWorkspaceSetup({
-        ptys: this.deps.ptys,
-        lane,
-        command: setup,
-        nodeRunId: nodeRun.id,
-        logPath: ptyLogPath(this.deps.paths, live.runId, `setup-${nodeRun.id}`),
-        env: childEnv({}, this.deps.env),
-        signal,
-      });
-      this.patchNodeRun(nodeRun.id, { laneSetup: res.ok ? "succeeded" : "failed" });
-      if (!res.ok || signal.aborted) live.needsSetup.add(lane.id);
-      if (signal.aborted) return { status: "cancelled" };
-      if (!res.ok) return { status: "failed", error: `Workspace setup failed (exit code ${res.exitCode ?? "none"})` };
+      if (prep.copyFiles.length > 0) {
+        try {
+          const copied = copyRepoFiles(this.deps.repo.path, lane.worktreePath, prep.copyFiles);
+          store.appendEvent(live.runId, nodeRun.id, "lane.files_copied", { laneId: lane.id, ...copied });
+        } catch (err) {
+          this.patchNodeRun(nodeRun.id, { laneSetup: "failed" });
+          live.needsSetup.add(lane.id);
+          return { status: "failed", error: `Could not copy the repository's local files into the worktree: ${errorMessage(err)}` };
+        }
+      }
+      let ok = true;
+      if (prep.command) {
+        const res = await runWorkspaceSetup({
+          ptys: this.deps.ptys,
+          lane,
+          command: prep.command,
+          nodeRunId: nodeRun.id,
+          logPath: ptyLogPath(this.deps.paths, live.runId, `setup-${nodeRun.id}`),
+          env: childEnv({}, this.deps.env),
+          signal,
+        });
+        ok = res.ok;
+        if (!res.ok && !signal.aborted) {
+          this.patchNodeRun(nodeRun.id, { laneSetup: "failed" });
+          live.needsSetup.add(lane.id);
+          return { status: "failed", error: `Workspace setup failed (exit code ${res.exitCode ?? "none"})` };
+        }
+      }
+      this.patchNodeRun(nodeRun.id, { laneSetup: ok && !signal.aborted ? "succeeded" : "failed" });
+      if (signal.aborted) {
+        live.needsSetup.add(lane.id);
+        return { status: "cancelled" };
+      }
     }
 
     const predecessors = this.contextPredecessors(live, node.id, nodeRun);
@@ -1279,7 +1330,7 @@ export class Engine {
   private trackLane(live: LiveRun, laneId: string, creation: Promise<Lane>): Promise<Lane> {
     const tracked = creation.then(
       (lane) => {
-        if (live.graph.settings.workspaceSetup) live.needsSetup.add(lane.id);
+        if (this.needsPreparation(live.graph)) live.needsSetup.add(lane.id);
         this.deps.store.appendEvent(live.runId, null, "lane.created", { laneId: lane.id, branch: lane.branch });
         return lane;
       },

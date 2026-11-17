@@ -12,6 +12,9 @@ import { PrRunner } from "../src/runners/git/pr-runner.js";
 import { LinearUpdateRunner } from "../src/runners/linear-runner.js";
 import { createRunnerRegistry } from "../src/runners/registry.js";
 import { ShellRunner } from "../src/runners/shell-runner.js";
+import { TestRunner } from "../src/runners/test-runner.js";
+import { AppRunner } from "../src/runners/app-runner.js";
+import { AppManager } from "../src/apps/app-manager.js";
 import type { LaneManager } from "../src/workspace/lane-manager.js";
 
 describe("createRunnerRegistry", () => {
@@ -20,10 +23,13 @@ describe("createRunnerRegistry", () => {
     const ptys = new PtyManager(new EventBus(), () => null);
     const claude = new ClaudeRunner({ ptys: ptys.owned("repo"), hooks: new HookRouter(), paths, pgHookPath: "/x", endpoint: () => ({ port: 1, hookSecret: "t" }) });
     const linear = { issueContext: async () => [], comment: async () => undefined, setState: async () => undefined };
-    const reg = createRunnerRegistry({ claude, ptys: ptys.owned("repo"), lanes: {} as LaneManager, paths, linear });
+    const apps = new AppManager({ repoId: "repo", repoPath: "/tmp/pg-registry-repo", ptys: ptys.owned("repo"), paths });
+    const reg = createRunnerRegistry({ claude, ptys: ptys.owned("repo"), lanes: {} as LaneManager, paths, linear, apps });
     expect(reg.prompt).toBe(claude);
     expect(reg.command).toBe(claude);
     expect(reg.shell).toBeInstanceOf(ShellRunner);
+    expect(reg.app).toBeInstanceOf(AppRunner);
+    expect(reg.test).toBeInstanceOf(TestRunner);
     expect(reg.commit).toBeInstanceOf(CommitRunner);
     expect(reg.merge).toBeInstanceOf(MergeRunner);
     expect(reg.pr).toBeInstanceOf(PrRunner);

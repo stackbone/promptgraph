@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Lane, NodeRun, RunBriefEntry, RunSummary, ServerMessageOf, UsageLimits } from "@promptgraph/shared";
+import type { AppProcess, Lane, NodeRun, RepoSettingsResponse, RunBriefEntry, RunSummary, ServerMessageOf, UsageLimits } from "@promptgraph/shared";
 
 /** Chat panel messages (§21.6), broadcast as-is by the WsHub. */
 export type ChatServerMessage = ServerMessageOf<"chat:item" | "chat:delta" | "chat:status" | "chat:session" | "chat:deleted">;
@@ -27,6 +27,10 @@ export interface BusEvents {
   "pty:data": { ptyId: string; data: Buffer };
   "pty:exit": { ptyId: string; code: number | null };
   "graphs:changed": { repoId: string; graphId: string };
+  /** The repository settings or their analysis changed (§25.2; RepoSettingsService). */
+  "repo-settings:update": { repoId: string; state: RepoSettingsResponse };
+  /** The repository's started applications changed (§25.4; AppManager). */
+  "apps:status": { repoId: string; apps: AppProcess[] };
   /** Chat panel (§21): every chat:* server message (each carries its repoId). */
   chat: { message: ChatServerMessage };
   /** A node entered an attention status (emitted once per transition). */

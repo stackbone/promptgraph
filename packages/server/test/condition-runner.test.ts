@@ -82,7 +82,7 @@ describe("ConditionRunner exitCode", () => {
     const prompt = start({ kind: "exitCode" }, [pred({ text: "hi" }, { type: "prompt", label: "Impl" })]);
     expect(await prompt.exec.result).toEqual({
       status: "failed",
-      error: 'Exit-code condition: predecessor "Impl" (prompt) has no exit code; connect a shell node',
+      error: 'Exit-code condition: predecessor "Impl" (prompt) has no exit code; connect a shell or Run tests node',
     });
   });
 
@@ -280,7 +280,7 @@ describe("validation (shared)", () => {
 
   it("exitCode needs a shell predecessor; regex must compile", async () => {
     expect(await errors(graph({ kind: "exitCode" }, "shell"))).toEqual([]);
-    expect(await errors(graph({ kind: "exitCode" }, "prompt"))).toEqual(["An exit-code condition needs a shell predecessor."]);
+    expect(await errors(graph({ kind: "exitCode" }, "prompt"))).toEqual(["An exit-code condition needs a shell or Run tests predecessor."]);
     expect((await errors(graph({ kind: "regex", pattern: "(", flags: "" }, "prompt")))[0]).toMatch(/^Invalid regex: /);
     expect(await errors(graph({ kind: "regex", pattern: "x", flags: "q" }, "prompt"))).toHaveLength(1);
   });
