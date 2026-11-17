@@ -8,6 +8,7 @@ import { registerRepoScope, type AppEnv } from "./repo-scope.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerDaemonRoutes } from "./routes/daemon.js";
 import { registerFsRoutes } from "./routes/fs.js";
+import { registerGitRoutes } from "./routes/git.js";
 import { registerGraphRoutes } from "./routes/graphs.js";
 import { registerHookRoutes } from "./routes/hooks.js";
 import { registerLinearRoutes } from "./routes/linear.js";
@@ -46,6 +47,7 @@ export function createHttpApp(daemon: DaemonContext): Hono<AppEnv> {
   registerNodeRunRoutes(app);
   registerRepoMiscRoutes(app, daemon);
   registerChatRoutes(app);
+  registerGitRoutes(app);
   registerStatic(app, webDistDir(daemon.env));
   app.notFound((c) => c.json({ error: `No route for ${c.req.method} ${new URL(c.req.url).pathname}`, code: "not_found" }, 404));
   app.onError((err, c) => {
