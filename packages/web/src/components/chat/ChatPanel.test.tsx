@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ChatItem, ClientMessage, Graph, SaveGraphResponse } from "@promptgraph/shared";
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatSessionOf, linearGraph } from "../../test-fixtures";
@@ -14,6 +14,8 @@ import type { TabChats } from "../../store/tabs-store";
 import { TabContext, type TabContextValue } from "../tabs/tab-context";
 import { ChatDock } from "./ChatDock";
 import { ChatWindow, type ChatWindowActions } from "./ChatPanel";
+import { daemonApi } from "../../api/rest";
+import { clipboardWith, IMAGE_ID } from "../common/image-test-utils";
 
 /** The view under test (its repository's chat store is getChatStore(TEST_REPO_ID)). */
 let view: TestView;
@@ -113,6 +115,42 @@ describe("ChatPanel", () => {
       context: { graphId: "g1", graphName: "Edited", selectedNodeIds: ["b"], selectedEdgeIds: [], runId: null, readOnly: false },
     });
     expect((input as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("pastes an image as an Image #1 chip and sends it with the message, even without text (§25)", async () => {
+    show();
+    const upload = vi.spyOn(daemonApi, "uploadImage").mockResolvedValue({ id: IMAGE_ID, bytes: 4 });
+    const user = userEvent.setup();
+    view.render(<Window />);
+    const input = screen.getByRole("textbox", { name: "Message Claude" });
+    fireEvent.paste(input, { clipboardData: clipboardWith(new File([new Uint8Array([1, 2, 3, 4])], "shot.png", { type: "image/png" })) });
+    expect(await screen.findByRole("button", { name: "Image #1 (preview)" })).toBeTruthy();
+    expect(upload).toHaveBeenCalledWith({ mediaType: "image/png", data: "AQIDBA==" });
+    expect((input as HTMLTextAreaElement).value).toBe("");
+    input.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ type: "chat:send", text: "", images: [IMAGE_ID] });
+    expect(screen.queryByRole("button", { name: "Image #1 (preview)" })).toBeNull();
+    upload.mockRestore();
+  });
+
+  it("keeps a paste with plain text as text", async () => {
+    show();
+    const upload = vi.spyOn(daemonApi, "uploadImage");
+    view.render(<Window />);
+    const input = screen.getByRole("textbox", { name: "Message Claude" });
+    fireEvent.paste(input, { clipboardData: clipboardWith(new File([new Uint8Array([1])], "cells.png", { type: "image/png" }), "a\tb") });
+    expect(upload).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("image-chip")).toBeNull();
+    upload.mockRestore();
+  });
+
+  it("shows the images of a sent message", () => {
+    show("idle", [{ id: "u2", ts: 6, kind: "user", text: "like this", images: [IMAGE_ID] }]);
+    view.render(<Window />);
+    expect(screen.getByRole("button", { name: "Image #1 (preview)" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove Image #1" })).toBeNull();
   });
 
   it("shows Stop while Claude works and sends an interrupt", async () => {
@@ -238,6 +276,19 @@ describe("ChatPanel", () => {
     show("thinking");
     view.render(<Window />);
     expect(within(screen.getByRole("list", { name: "Chat messages" })).getByText("Thinking…")).toBeTruthy();
+  });
+
+  it("warns in the status line while the Bypass permissions setting is on (§21.2)", () => {
+    const notice = /Bypass permissions is on/;
+    useDaemonStore.setState({ settings: { notifications: true, bypassPermissions: false } });
+    show();
+    const { unmount } = view.render(<Window />);
+    expect(within(screen.getByRole("status")).queryByText(notice)).toBeNull();
+    unmount();
+    useDaemonStore.setState({ settings: { notifications: true, bypassPermissions: true } });
+    view.render(<Window />);
+    expect(within(screen.getByRole("status")).getByText(notice)).toBeTruthy();
+    useDaemonStore.setState({ settings: null });
   });
 
   it("shows concurrent permission prompts one after the other", async () => {

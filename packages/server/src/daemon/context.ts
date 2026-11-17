@@ -21,7 +21,9 @@ import { VoiceService } from "../voice/voice-service.js";
 import { LinearClient, type LinearFetch } from "../linear/client.js";
 import { LinearService } from "../linear/service.js";
 import { Sessions } from "./sessions.js";
+import { migrateLegacyWorktrees } from "../workspace/worktree-migration.js";
 import { UsageLimitsTracker } from "./usage-limits.js";
+import { ImageStore } from "../images/image-store.js";
 import { UsageProbe, type UsageProbeRunner } from "./usage-probe.js";
 
 /**
@@ -68,6 +70,8 @@ export interface DaemonContext {
   usageProbe: UsageProbe;
   /** Linear connection (§24): the saved API key and issue lookups. */
   linear: LinearService;
+  /** Pasted images (§25). */
+  images: ImageStore;
 }
 
 export interface CreateDaemonContextOptions {
@@ -101,6 +105,12 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
   fs.chmodSync(paths.home, 0o700);
   const store = new Store(openDatabase(paths.stateDb));
   fs.chmodSync(paths.stateDb, 0o600);
+  // Before any repository context: worktrees move out of PG_HOME (§11.4); a failure keeps them working in place.
+  try {
+    migrateLegacyWorktrees({ store, paths, env });
+  } catch (err) {
+    console.warn(`[worktrees] migration skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const bus = new EventBus();
   const settings = new AppSettingsStore(paths.settingsFile);
   const ptys = new PtyManager(bus, (ptyId) => resolvePtyLogPath(store, paths, ptyId));
@@ -129,6 +139,7 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
     hookSecret: randomBytes(32).toString("base64url"),
     claudeAuth: new ClaudeAuthProbe(env, { run: opts.authStatusRunner }),
     usageLimits,
+    images: new ImageStore(paths.imagesDir),
     usageProbe: new UsageProbe(env, usageLimits, { run: opts.usageProbeRunner, cwd: () => os.homedir() }),
     getToken: () => token,
     setToken: (t) => {

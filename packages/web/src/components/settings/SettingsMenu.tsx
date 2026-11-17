@@ -106,8 +106,9 @@ export function SettingsMenu({ repoPath = null, side = "bottom" }: { repoPath?: 
             Bypass permissions
           </DropdownMenuCheckboxItem>
           <p className="px-1.5 py-1 text-[11px] leading-snug text-muted-foreground">
-            Claude consoles start in bypassPermissions mode instead of the graph&apos;s default (a node&apos;s own mode
-            still wins). Claude no longer asks before running commands or reading outside its worktree.
+            Claude consoles and the chat start in bypassPermissions mode instead of the graph&apos;s default (a node&apos;s
+            own mode still wins). Claude no longer asks before running commands, editing files or reading outside its
+            working directory.
             {settings?.bypassPermissions && (
               <span className="text-amber-600/90"> On: a step can push or approve its own gates without asking you.</span>
             )}

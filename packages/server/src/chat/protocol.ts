@@ -120,8 +120,20 @@ export const ToolResultBlockSchema = z.looseObject({
 
 // --- stdin -----------------------------------------------------------------
 
-/** One user turn. */
-export function userTurnLine(content: string): string {
+/** An image sent with a user turn (§25): its media type and bytes, base64. */
+export interface TurnImage {
+  mediaType: string;
+  data: string;
+}
+
+/** One user turn; with images, the content is the image blocks followed by the text (as Claude Code sends a paste). */
+export function userTurnLine(text: string, images: readonly TurnImage[] = []): string {
+  const content = images.length
+    ? [
+        ...images.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } })),
+        { type: "text", text },
+      ]
+    : text;
   return JSON.stringify({ type: "user", message: { role: "user", content } });
 }
 

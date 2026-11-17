@@ -14,7 +14,8 @@ import {
   type Run,
 } from "@promptgraph/shared";
 import { childEnv, claudeBin, type PgHookEnv } from "../../config/child-env.js";
-import { hooksSettingsPath, ptyLogPath, runDir, type PgPaths } from "../../config/paths.js";
+import { hooksSettingsPath, nodeRunImagesDir, ptyLogPath, runDir, type PgPaths } from "../../config/paths.js";
+import { ImageStore } from "../../images/image-store.js";
 import type { HookMessage, HookRouter } from "../../hooks/hook-router.js";
 import { hookToken } from "../../hooks/hook-token.js";
 import type { OwnedPtys, PtyHandle } from "../../pty/pty-manager.js";
@@ -238,6 +239,8 @@ interface LaunchPlan {
    * resumed without a message and the previous output stands, as if that turn just stopped.
    */
   resumeIdle?: { text: string | null };
+  /** Pasted images of a prompt node (§25), copied from the image store before the start; their dir is --add-dir. */
+  images?: { dir: string; copies: Array<{ from: string; to: string }> };
 }
 
 interface SessionRegistry {
@@ -312,7 +315,11 @@ class ClaudeExecution {
       this.resumeIdle = plan.resumeIdle;
       if (plan.resumeSessionId && !isSessionId(plan.resumeSessionId)) throw new Error("The session to resume has an invalid id");
       this.cleanups.push(await this.sessions.claim(plan.sessionId));
-      const settingsPath = writeHooksSettings(hooksSettingsPath(this.deps.paths, run.id), this.deps.pgHookPath, { pgHome: this.deps.paths.home });
+      const bypass = plan.options.permissionMode === "bypassPermissions";
+      const settingsPath = writeHooksSettings(hooksSettingsPath(this.deps.paths, run.id, { bypass }), this.deps.pgHookPath, {
+        pgHome: this.deps.paths.home,
+        bypass,
+      });
       const autoTrust = run.graphSnapshot.settings.autoTrustWorktrees;
       if (autoTrust) await preTrustDirectory(lane.worktreePath, this.env);
       if (this.ending) return this.settle(this.endingResult(null));
@@ -335,6 +342,7 @@ class ClaudeExecution {
       if (this.resuming && plan.resumeTranscriptPath) this.usageBaseline = assistantMessageIds(plan.resumeTranscriptPath);
       const endpoint = this.deps.endpoint();
       const headerFile = this.writeHookHeader(endpoint.hookSecret);
+      if (plan.images) copyNodeImages(plan.images);
       const args = buildClaudeArgs({
         message: plan.message,
         sessionId: plan.sessionId,
@@ -345,6 +353,7 @@ class ClaudeExecution {
         model: plan.options.model,
         effort: plan.options.effort,
         allowedTools: plan.options.allowedTools,
+        addDirs: plan.images ? [plan.images.dir] : undefined,
       });
       this.handle = this.deps.ptys.spawn({
         id: nodeRun.id,
@@ -383,26 +392,38 @@ class ClaudeExecution {
       }
       return { ...resume, message: INTERRUPTED_MESSAGE };
     }
-    const message = buildInitialMessage(node, predecessors, options.completion);
+    const images = this.nodeImages(node);
+    const imagePaths = images?.copies.map((c) => c.to) ?? [];
+    const withImages = <T extends object>(p: T): T & Pick<LaunchPlan, "images"> => (images ? { ...p, images } : p);
+    const message = buildInitialMessage(node, predecessors, options.completion, imagePaths);
     if (node.config.context === "resume") {
       // §15.4: inside a loop, later iterations continue the node's own session (it remembers what it tried),
       // with this iteration's context block (e.g. the new failing test output or the judge's reason).
       const own = this.ctx.previousIteration;
       if (own?.sessionId) {
-        const withContext = buildInitialMessage(asFresh(node), predecessors, options.completion);
-        return { node, options, message: withContext, sessionId: own.sessionId, resumeSessionId: own.sessionId, resumeTranscriptPath: own.transcriptPath };
+        const withContext = buildInitialMessage(asFresh(node), predecessors, options.completion, imagePaths);
+        return withImages({ node, options, message: withContext, sessionId: own.sessionId, resumeSessionId: own.sessionId, resumeTranscriptPath: own.transcriptPath });
       }
       const pred = predecessors.find(
         (p) => (p.type === "prompt" || p.type === "command") && p.sessionId && p.laneId === nodeRun.laneId,
       );
       if (!pred?.sessionId && this.ctx.inLoopBody) {
         // First pass of a loop step without a Claude predecessor to continue: a new session with context.
-        return { node, options, message: buildInitialMessage(asFresh(node), predecessors, options.completion), sessionId: newSessionId() };
+        return withImages({ node, options, message: buildInitialMessage(asFresh(node), predecessors, options.completion, imagePaths), sessionId: newSessionId() });
       }
       if (!pred?.sessionId) throw new Error('Context "resume" needs a predecessor Claude node with a session in the same lane');
-      return { node, options, message, sessionId: pred.sessionId, resumeSessionId: pred.sessionId, resumeTranscriptPath: pred.transcriptPath };
+      return withImages({ node, options, message, sessionId: pred.sessionId, resumeSessionId: pred.sessionId, resumeTranscriptPath: pred.transcriptPath });
     }
-    return { node, options, message, sessionId: newSessionId() };
+    return withImages({ node, options, message, sessionId: newSessionId() });
+  }
+
+  /** Where a prompt node's pasted images come from (the image store) and go (the node run's images dir), §25. */
+  private nodeImages(node: ClaudeNode): LaunchPlan["images"] {
+    const ids = node.type === "prompt" ? (node.config.images ?? []) : [];
+    if (ids.length === 0) return undefined;
+    const dir = nodeRunImagesDir(this.ctx.lane.worktreePath, this.ctx.nodeRun.id);
+    const store = new ImageStore(this.deps.paths.imagesDir);
+    return { dir, copies: ids.map((id, i) => ({ from: store.file(id), to: path.join(dir, `image-${i + 1}${path.extname(id)}`) })) };
   }
 
   private enqueueHook(message: HookMessage): void {
@@ -591,6 +612,19 @@ async function exitsWithin(h: PtyHandle, ms: number): Promise<boolean> {
 }
 
 /** The node with context "fresh": its initial message carries the context block of its predecessors. */
+/** Copies a node's pasted images next to its lane (dir 0700, files 0600); a missing image fails the start. */
+function copyNodeImages(images: NonNullable<LaunchPlan["images"]>): void {
+  fs.mkdirSync(images.dir, { recursive: true, mode: 0o700 });
+  images.copies.forEach(({ from, to }, i) => {
+    try {
+      fs.copyFileSync(from, to);
+      fs.chmodSync(to, 0o600);
+    } catch {
+      throw new Error(`Image #${i + 1} of the prompt is missing from the image store (${path.basename(from)}): paste it again`);
+    }
+  });
+}
+
 function asFresh(node: ClaudeNode): ClaudeNode {
   return { ...node, config: { ...node.config, context: "fresh" as const } } as ClaudeNode;
 }

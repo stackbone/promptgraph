@@ -16,6 +16,7 @@ import {
   type DiffResponse,
   type DiffScope,
   type GetGraphResponse,
+  type GetImageResponse,
   type GetRunResponse,
   type GitLogResponse,
   type GitStateResponse,
@@ -38,6 +39,8 @@ import {
   type SaveGraphResponse,
   type StartRunResponse,
   type UpdateAppSettingsRequest,
+  type UploadImageRequest,
+  type UploadImageResponse,
   type UsageLimitsResponse,
   type ValidationResult,
   type VoiceStatus,
@@ -131,6 +134,14 @@ export function isApiStatus(err: unknown, status: number, code?: string): err is
 
 /** Daemon-wide routes. */
 export const daemonApi = {
+  /** Stores a pasted image (§25); 400 invalid_image, 413 image_too_large. */
+  uploadImage(body: UploadImageRequest): Promise<UploadImageResponse> {
+    return request("POST", API.images, body);
+  },
+  /** 404 image_not_found. */
+  getImage(id: string): Promise<GetImageResponse> {
+    return request("GET", API.image(id));
+  },
   daemon(): Promise<DaemonInfoResponse> {
     return request("GET", API.daemon);
   },

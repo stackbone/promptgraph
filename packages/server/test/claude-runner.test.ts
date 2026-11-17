@@ -7,6 +7,7 @@ import type { GraphInput, NodeRun } from "@promptgraph/shared";
 import { getPaths, hooksSettingsPath, ptyLogPath } from "../src/config/paths.js";
 import { EventBus } from "../src/events/bus.js";
 import { HookRouter } from "../src/hooks/hook-router.js";
+import { ImageStore } from "../src/images/image-store.js";
 import { hookToken } from "../src/hooks/hook-token.js";
 import { PtyManager } from "../src/pty/pty-manager.js";
 import { ClaudeRunner } from "../src/runners/claude/claude-runner.js";
@@ -222,6 +223,29 @@ describe("ClaudeRunner (fake claude)", () => {
     expect(await exec.result).toMatchObject({ status: "failed", error: "not good", output: { text: "Done: go" } });
   });
 
+  it("copies a prompt's pasted images next to the lane and has Claude read them (§25)", async () => {
+    const s = await setup();
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+    const { id } = new ImageStore(s.paths.imagesDir).put(png);
+    const { exec } = start(s, { prompt: "match this", images: [id, id], completion: auto0 });
+    expect(await exec.result).toMatchObject({ status: "succeeded" });
+    const dir = path.join(s.dir, ".images", "nr-n1");
+    expect(fs.readFileSync(path.join(dir, "image-1.png"))).toEqual(png);
+    expect(fs.statSync(path.join(dir, "image-2.png")).mode & 0o777).toBe(0o600);
+    const [inv] = s.invocations();
+    expect(inv!.argv).toContain(`--add-dir=${dir}`);
+    expect(inv!.argv[0]).toBe(
+      `match this\n\nThe user attached 2 images to this prompt. Look at each one with the Read tool before you start:\n- Image #1: ${dir}/image-1.png\n- Image #2: ${dir}/image-2.png`,
+    );
+  });
+
+  it("a pasted image missing from the image store fails the start", async () => {
+    const s = await setup();
+    const { exec } = start(s, { prompt: "x", images: [`${"c".repeat(64)}.png`], completion: auto0 });
+    expect(await exec.result).toMatchObject({ status: "failed", error: expect.stringContaining("Image #1 of the prompt is missing") });
+    expect(s.invocations()).toEqual([]);
+  });
+
   it("an unexpected exit fails the node", async () => {
     const s = await setup();
     const { exec } = start(s, { prompt: "boom [[crash]]", completion: auto0 });
@@ -336,6 +360,16 @@ describe("ClaudeRunner (fake claude)", () => {
       return argv[argv.indexOf("--permission-mode") + 1];
     };
     expect(modeOf(0)).toBe("bypassPermissions");
+    // Claude Code enforces blockReadsOutsideWorkingDirectories in bypass mode too: a bypass console gets a settings
+    // file without it, and keeps the secret deny rules.
+    const settingsOf = (i: number) => {
+      const argv = s.invocations()[i]!.argv;
+      return argv[argv.indexOf("--settings") + 1]!;
+    };
+    expect(settingsOf(0)).toBe(hooksSettingsPath(s.paths, run.id, { bypass: true }));
+    const bypassSettings = JSON.parse(fs.readFileSync(settingsOf(0), "utf8")) as { permissions: Record<string, unknown> };
+    expect(bypassSettings.permissions.blockReadsOutsideWorkingDirectories).toBeUndefined();
+    expect(bypassSettings.permissions.deny).toEqual(expect.arrayContaining([`Read(/${s.paths.home})`]));
     const reopened = await s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir);
     await waitFor(() => s.invocations().length === 2);
     expect(modeOf(1)).toBe("bypassPermissions");
@@ -350,6 +384,8 @@ describe("ClaudeRunner (fake claude)", () => {
     // A node's own mode wins; turning the setting off applies to the next console.
     await start(s, { prompt: "x", completion: auto0, permissionMode: "plan" }, { id: "n2" }).exec.result;
     expect(modeOf(3)).toBe("plan");
+    expect(settingsOf(3)).toBe(hooksSettingsPath(s.paths, run.id));
+    expect((JSON.parse(fs.readFileSync(settingsOf(3), "utf8")) as { permissions: Record<string, unknown> }).permissions.blockReadsOutsideWorkingDirectories).toBe(true);
     s.settings.bypassPermissions = false;
     await start(s, { prompt: "x", completion: auto0 }, { id: "n3" }).exec.result;
     expect(modeOf(4)).toBe("auto");

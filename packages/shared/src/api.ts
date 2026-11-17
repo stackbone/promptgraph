@@ -79,8 +79,9 @@ export const AppSettingsSchema = z.object({
   /** Voice dictation (§22). Absent in files written before it existed; absent fields = defaults. */
   voice: VoiceSettingsSchema.optional(),
   /**
-   * Start Claude node consoles in Claude Code's `bypassPermissions` mode (DESIGN §7.6): it replaces the graph's
-   * default permission mode; a node's own mode still wins. Off by default; lives only on this machine, never in a graph.
+   * Start Claude node consoles and chat processes in Claude Code's `bypassPermissions` mode (DESIGN §7.6, §21.2): it
+   * replaces the graph's default permission mode (and the chat's `default`); a node's own mode still wins. Off by
+   * default; lives only on this machine, never in a graph.
    */
   bypassPermissions: z.boolean().default(false),
 });
@@ -441,6 +442,10 @@ export const API = {
   linear: "/api/linear",
   /** PUT SetLinearKeyRequest → LinearStatusResponse; DELETE → LinearStatusResponse. */
   linearKey: "/api/linear/key",
+  /** POST UploadImageRequest → UploadImageResponse (§25). */
+  images: "/api/images",
+  /** GET → GetImageResponse. */
+  image: (id: string) => `/api/images/${enc(id)}`,
   /** GET → LinearIssueStatesResponse: the current state of linked issues, by Linear id. */
   linearIssueStates: (ids: readonly string[]) => `/api/linear/issue-states?ids=${enc(ids.join(","))}`,
   /** GET → LinearIssuesResponse; `states`: state types to keep (default: the open ones); `scope`: mine / all. */

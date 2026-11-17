@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { EngineError } from "../engine/engine.js";
+import { ImageError } from "../images/image-store.js";
 import { GraphLoadError, GraphNotFoundError } from "../graphs/graph-store.js";
 import { errorMessage } from "../util/text.js";
 
@@ -36,6 +37,9 @@ export function toApiError(err: unknown): { status: ContentfulStatusCode; body: 
   }
   if (err instanceof EngineError) return { status: ENGINE_STATUS[err.code], body: apiError(err.message, err.code, err.details) };
   if (err instanceof GraphNotFoundError) return { status: 404, body: apiError(err.message, "not_found") };
+  if (err instanceof ImageError) {
+    return { status: err.code === "image_not_found" ? 404 : err.code === "image_too_large" ? 413 : 400, body: apiError(err.message, err.code) };
+  }
   if (err instanceof GraphLoadError) return { status: 422, body: apiError(err.message, "invalid_graph", err.details) };
   return { status: 500, body: apiError(errorMessage(err), "internal") };
 }

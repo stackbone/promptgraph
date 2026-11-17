@@ -56,6 +56,7 @@ describe("buildClaudeArgs", () => {
         model: "opus",
         effort: "high",
         allowedTools: ["Bash(pnpm test:*)", "Edit"],
+        addDirs: ["/pg/images/nr1"],
       }),
     ).toEqual([
       "/simplify",
@@ -65,6 +66,7 @@ describe("buildClaudeArgs", () => {
       "--permission-mode", "default",
       "--model", "opus",
       "--effort", "high",
+      "--add-dir=/pg/images/nr1",
       "--allowedTools", "Bash(pnpm test:*)", "Edit",
     ]);
   });
@@ -137,6 +139,10 @@ describe("hooks settings and pg-hook", () => {
     writeHooksSettings(file, "/x/pg-hook", home);
     expect(fs.statSync(file).mtimeMs).toBe(mtime);
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(buildHooksSettings("/x/pg-hook", home));
+    expect(s.permissions.blockReadsOutsideWorkingDirectories).toBe(true);
+    // Bypass consoles: same deny rules, no read block (Claude Code enforces it in bypass mode too).
+    const bypass = buildHooksSettings("/x/pg-hook", { ...home, bypass: true });
+    expect(bypass.permissions).toEqual({ deny: s.permissions.deny });
   });
 
   it("denies Claude's file tools the token, the Linear key, the state DB, the run dirs, the server records and the logs of the given PG_HOME (§7.6)", () => {

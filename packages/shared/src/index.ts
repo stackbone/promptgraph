@@ -14,6 +14,7 @@ export * from "./layout.js";
 export * from "./graph-patch.js";
 export * from "./run-edit.js";
 export * from "./chat.js";
+export * from "./images.js";
 export * from "./voice.js";
 export * from "./validation/types.js";
 export * from "./validation/validate.js";

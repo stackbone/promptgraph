@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { buildChatBlocks, groupTitle, stepLabel, stepStatus, toolCategory, type ChatBlock, type StepStatus, type ToolCategory, type ToolStep } from "../../lib/chat-blocks";
 import { Markdown } from "../../lib/markdown";
 import type { ChatSessionView } from "../../store/chat-store";
+import { ImageAttachments } from "../common/ImageAttachments";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 
@@ -100,8 +101,9 @@ function ItemView({ item }: { item: ChatItem }) {
     case "user":
       return (
         <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-muted px-3 py-2 text-sm whitespace-pre-wrap text-foreground" data-kind="user">
-            {item.text}
+          <div className="max-w-[85%] space-y-1.5 rounded-2xl rounded-br-md bg-muted px-3 py-2 text-sm whitespace-pre-wrap text-foreground" data-kind="user">
+            {item.images?.length ? <ImageAttachments images={item.images} className="justify-end" /> : null}
+            {item.text && <div>{item.text}</div>}
           </div>
         </div>
       );

@@ -30,11 +30,11 @@ export function currentChatContext(view: ChatView): ChatContext {
 
 /**
  * Sends a user message on a chat of the view's repository. The pending autosave is written first, so Claude reads
- * the graph the user sees. Returns false when nothing was sent.
+ * the graph the user sees. `images` are ids of pasted images (§25). Returns false when nothing was sent.
  */
-export async function sendChatMessage(view: ChatView, sessionId: string, text: string): Promise<boolean> {
+export async function sendChatMessage(view: ChatView, sessionId: string, text: string, images: string[] = []): Promise<boolean> {
   const trimmed = text.trim();
-  if (!trimmed) return false;
+  if (!trimmed && images.length === 0) return false;
   await view.editor.getState().flushSave();
   // Claude would read (and patch) the file on disk, not the graph on screen.
   const editor = view.editor.getState();
@@ -46,7 +46,7 @@ export async function sendChatMessage(view: ChatView, sessionId: string, text: s
     return false;
   }
   const store = getChatStore(view.repoId);
-  const sent = store.getState().send(sessionId, trimmed, currentChatContext(view));
+  const sent = store.getState().send(sessionId, trimmed, currentChatContext(view), images);
   if (!sent) toast("error", "Not connected to the promptgraph daemon: the message was not sent.");
   return sent;
 }

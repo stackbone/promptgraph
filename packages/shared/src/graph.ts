@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ImageIdListSchema } from "./images.js";
 import { branchPrefixForIssue, GraphIssuesSchema, type GraphIssue } from "./linear.js";
 
 // ---------------------------------------------------------------------------
@@ -70,7 +71,12 @@ const claudeOptions = {
   completion: CompletionPolicySchema.optional(),
 };
 
-export const PromptConfigSchema = z.object({ prompt: z.string().default(""), ...claudeOptions });
+export const PromptConfigSchema = z.object({
+  prompt: z.string().default(""),
+  /** Images pasted into the prompt (§25), sent to Claude with it; ids of the daemon's image store. */
+  images: ImageIdListSchema.optional(),
+  ...claudeOptions,
+});
 export type PromptConfig = z.infer<typeof PromptConfigSchema>;
 
 /** `command` is the slash command line itself, e.g. "/code-review high". */

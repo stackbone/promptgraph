@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ImageIdListSchema } from "./images.js";
 import { RepoIdSchema } from "./repos.js";
 
 /**
@@ -25,7 +26,13 @@ const itemBase = {
 /** Maximum length of `tool_result.text`; longer results are truncated by the server. */
 export const CHAT_TOOL_RESULT_MAX_CHARS = 2000;
 
-export const ChatUserItemSchema = z.object({ ...itemBase, kind: z.literal("user"), text: z.string() });
+export const ChatUserItemSchema = z.object({
+  ...itemBase,
+  kind: z.literal("user"),
+  text: z.string(),
+  /** Images sent with the message (§25), ids of the daemon's image store. */
+  images: ImageIdListSchema.optional(),
+});
 /** Final text of one assistant text block (streamed before via chat:delta with the same messageId). */
 export const ChatAssistantItemSchema = z.object({ ...itemBase, kind: z.literal("assistant"), messageId: z.string(), text: z.string() });
 export const ChatToolUseItemSchema = z.object({
@@ -311,9 +318,11 @@ export const ChatSendMessageSchema = z.object({
   type: z.literal("chat:send"),
   repoId: RepoIdSchema,
   sessionId: z.string(),
-  text: z.string().min(1),
+  /** May be empty when the message carries images (§25). */
+  text: z.string(),
+  images: ImageIdListSchema.optional(),
   context: ChatContextSchema,
-});
+}).refine((m) => m.text.length > 0 || (m.images?.length ?? 0) > 0, { message: "A message needs text or an image", path: ["text"] });
 export const ChatInterruptMessageSchema = z.object({ type: z.literal("chat:interrupt"), repoId: RepoIdSchema, sessionId: z.string() });
 export const ChatPermissionMessageSchema = z.object({
   type: z.literal("chat:permission"),

@@ -4,12 +4,18 @@ import { CLAUDE_HOOK_FOR_EVENT, HOOK_EVENTS } from "@promptgraph/shared";
 
 export interface ClaudeHooksSettings {
   hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ type: "command"; command: string; timeout?: number }> }>>;
-  permissions: { deny: string[]; blockReadsOutsideWorkingDirectories: true };
+  permissions: { deny: string[]; blockReadsOutsideWorkingDirectories?: true };
 }
 
 export interface HooksSettingsOptions {
   /** promptgraph's home (PG_HOME): its secrets are denied to Claude's file tools (DESIGN §7.6). */
   pgHome: string;
+  /**
+   * The console starts in `bypassPermissions` (the app setting, §7.6): no `blockReadsOutsideWorkingDirectories`,
+   * which Claude Code enforces in bypass mode too and would keep asking before every read outside the worktree.
+   * The deny rules stay.
+   */
+  bypass?: boolean;
 }
 
 /** pg-hook gives up after 2 s (curl -m 2); the timeout only guards against a stuck shell. */
@@ -67,7 +73,8 @@ export function buildHooksSettings(pgHookPath: string, opts: HooksSettingsOption
       { hooks: [{ type: "command", command: `${shellQuote(pgHookPath)} ${event}`, timeout: HOOK_TIMEOUT_SEC }] },
     ];
   }
-  return { hooks, permissions: { deny: secretDenyRules(opts.pgHome), blockReadsOutsideWorkingDirectories: true } };
+  const deny = secretDenyRules(opts.pgHome);
+  return { hooks, permissions: opts.bypass ? { deny } : { deny, blockReadsOutsideWorkingDirectories: true } };
 }
 
 /** Writes hooks.json for a run (idempotent) and returns its path. */

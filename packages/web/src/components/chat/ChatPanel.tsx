@@ -19,6 +19,7 @@ import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import { ChatItems, PermissionCard } from "./ChatItems";
 import { QuestionCard } from "./ChatQuestionCard";
+import { ImageAttachments, useImagePaste } from "../common/ImageAttachments";
 import { DictationPreview, DictationStatus, MicButton } from "./Dictation";
 
 const EMPTY_VIEW = emptyView();
@@ -306,9 +307,11 @@ const STATUS_TEXT: Partial<Record<ChatStatus, string>> = {
 function StatusLine({ status, warning, question = false }: { status: ChatStatus; warning: string | null; question?: boolean }) {
   const text = status === "waiting_permission" && question ? "Waiting for your answer" : STATUS_TEXT[status];
   const visible = !!text && status !== "thinking";
+  // The app setting also starts chat processes in bypassPermissions mode (DESIGN §7.6, §21.2).
+  const bypass = useDaemonStore((s) => s.settings?.bypassPermissions ?? false);
   // Always mounted (possibly empty): screen readers announce changes of an existing live region only.
   return (
-    <div role="status" className={cn("space-y-0.5 px-3 text-[11px]", (visible || warning) && "border-t py-1")}>
+    <div role="status" className={cn("space-y-0.5 px-3 text-[11px]", (visible || warning || bypass) && "border-t py-1")}>
       {text && (
         <p
           className={cn(
@@ -326,6 +329,11 @@ function StatusLine({ status, warning, question = false }: { status: ChatStatus;
           <Icons.alert className="shrink-0" /> {warning}
         </p>
       )}
+      {bypass && (
+        <p className="flex items-center gap-1.5 text-amber-700">
+          <Icons.alert className="shrink-0" /> Bypass permissions is on: Claude runs commands and edits files without asking.
+        </p>
+      )}
     </div>
   );
 }
@@ -334,11 +342,13 @@ function Composer({ sessionId, status }: { sessionId: string; status: ChatStatus
   const view = useView();
   const chatApi = getChatStore(view.repoId);
   const [text, setText] = useState("");
+  const [images, setImages] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const connected = useDaemonStore((s) => s.connection === "open");
   const busy = isBusy(status);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const canSendText = (value: string) => value.trim().length > 0 && !busy && !sending && connected;
+  const paste = useImagePaste({ owner: sessionId, images, onChange: setImages, disabled: !connected });
+  const canSendText = (value: string) => (value.trim().length > 0 || images.length > 0) && paste.uploading === 0 && !busy && !sending && connected;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -348,7 +358,10 @@ function Composer({ sessionId, status }: { sessionId: string; status: ChatStatus
     if (!canSendText(value)) return;
     setSending(true);
     try {
-      if (await sendChatMessage(view, sessionId, value)) setText("");
+      if (await sendChatMessage(view, sessionId, value, images)) {
+        setText("");
+        setImages([]);
+      }
     } finally {
       setSending(false);
     }
@@ -383,6 +396,7 @@ function Composer({ sessionId, status }: { sessionId: string; status: ChatStatus
   return (
     <div className="shrink-0 space-y-1.5 border-t p-2">
       <ContextChip />
+      <ImageAttachments images={images} uploading={paste.uploading} onRemove={(i) => setImages((list) => list.filter((_, j) => j !== i))} />
       <div className="flex items-end gap-1.5">
         {/* One grid cell for both: the in-flow preview grows the cell, so a long partial stretches the textarea too. */}
         <div className="relative grid min-w-0 flex-1">
@@ -410,6 +424,7 @@ function Composer({ sessionId, status }: { sessionId: string; status: ChatStatus
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             onKeyUp={(e) => void dictation.onKeyUp(e)}
+            onPaste={paste.onPaste}
           />
           {preview && <DictationPreview value={text} insertion={preview} partial={dictation.partial} textarea={inputRef.current} />}
         </div>

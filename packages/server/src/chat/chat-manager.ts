@@ -14,13 +14,14 @@ import {
 } from "@promptgraph/shared";
 import { childEnv, claudeBin } from "../config/child-env.js";
 import type { ChatServerMessage, EventBus } from "../events/bus.js";
+import { secretDenyRules } from "../runners/claude/hooks-settings.js";
 import type { ChatSessionRecord, Store } from "../store/store.js";
 import { errorMessage, tailLines } from "../util/text.js";
 import { buildChatArgs, type ChatMcpLaunch } from "./launch.js";
 import { NdjsonParser } from "./ndjson.js";
 import { ChatNormalizer, type ChatEvent } from "./normalize.js";
 import { spawnChatProcess, type ChatChild, type ChatChildExit, type ChatSpawner } from "./process.js";
-import { controlErrorLine, interruptLine, permissionResponseLine, userTurnLine, type RateLimitInfo } from "./protocol.js";
+import { controlErrorLine, interruptLine, permissionResponseLine, userTurnLine, type RateLimitInfo, type TurnImage } from "./protocol.js";
 import { chatItemsFromTranscript, findChatTranscript } from "./transcript.js";
 
 export const CHAT_IDLE_TIMEOUT_MS = 15 * 60_000;
@@ -32,7 +33,7 @@ export const UNTITLED_CHAT = "New chat";
 const MAX_ITEMS = 5_000;
 const STDERR_TAIL_CHARS = 8_000;
 
-export type ChatErrorCode = "not_found" | "invalid_state";
+export type ChatErrorCode = "not_found" | "invalid_state" | "invalid_request";
 
 export class ChatError extends Error {
   constructor(
@@ -67,6 +68,15 @@ export interface ChatManagerOptions {
    * chat tells Claude about them once per session and again when the set changes. Absent: no issue context.
    */
   linkedIssues?: (graphId: string) => Promise<LinkedIssues>;
+  /** The daemon's image store (§25): images sent with a message are read from it. Absent: messages carry no images. */
+  images?: { read(id: string): { mediaType: string; bytes: Buffer } };
+  /**
+   * The app setting `bypassPermissions` (DESIGN §7.6, §21.2), read at every spawn. An idle process started with the
+   * other value is restarted (`--resume`) before the next turn, so a change applies to open chats too. Absent: off.
+   */
+  bypassPermissions?: () => boolean;
+  /** PG_HOME: its secrets are denied to the chat's file tools in every mode (DESIGN §7.6, §21.2). Absent: no rules. */
+  pgHome?: string;
 }
 
 /** What linkedIssues resolves to; `note` explains missing descriptions (Linear not connected, unavailable). */
@@ -94,6 +104,8 @@ interface ChatProcess {
   stderr: string;
   /** Session cost before this process; Claude Code reports a cumulative total per process. */
   costBase: number;
+  /** Started in `bypassPermissions` mode (the app setting at spawn time). */
+  bypass: boolean;
   /** We closed it (idle, delete, shutdown): its exit is not an error. */
   stopping: boolean;
   idleTimer: NodeJS.Timeout | null;
@@ -199,27 +211,44 @@ export class ChatManager {
   }
 
   /** Sends one user turn; spawns (or resumes) the process when there is none. */
-  send(id: string, text: string, context: ChatContext): void {
+  send(id: string, text: string, context: ChatContext, imageIds: readonly string[] = []): void {
     if (this.closing) throw new ChatError("invalid_state", "The server is shutting down");
     const session = this.require(id);
+    if (!text.trim() && imageIds.length === 0) throw new ChatError("invalid_request", "The message is empty");
+    const images = this.readImages(imageIds);
     this.items(session);
     if (session.record.title === null) {
-      session.record = this.opts.store.updateChatSession(id, { title: chatTitle(text) });
+      session.record = this.opts.store.updateChatSession(id, { title: chatTitle(text.trim() ? text : "Image") });
     } else {
       session.record = this.opts.store.updateChatSession(id, {});
     }
-    this.pushItem(session, { id: this.itemId(session), ts: this.now(), kind: "user", text });
+    this.pushItem(session, { id: this.itemId(session), ts: this.now(), kind: "user", text, ...(imageIds.length ? { images: [...imageIds] } : {}) });
     const graphId = context.graphId;
     const resolve = this.opts.linkedIssues;
     if (!resolve || !graphId || (!context.issues?.length && session.issuesSent === null)) {
-      const line = userTurnLine(withChatContext(context, text));
+      const line = userTurnLine(withChatContext(context, text), images);
       if (session.prep) this.chainPrep(session, async () => line);
       else this.enqueue(session, line);
       return;
     }
     // The linked issues are looked up before the turn is written; meanwhile the chat shows Claude working.
     if (session.status === "idle" || session.status === "exited" || session.status === "error") this.setStatus(session, "thinking");
-    this.chainPrep(session, async () => userTurnLine(withChatContext(context, text, await this.issuesBlock(session, graphId, resolve))));
+    this.chainPrep(session, async () => userTurnLine(withChatContext(context, text, await this.issuesBlock(session, graphId, resolve)), images));
+  }
+
+  /** The images of a message, base64, from the image store; a missing one refuses the whole message. */
+  private readImages(ids: readonly string[]): TurnImage[] {
+    if (ids.length === 0) return [];
+    const store = this.opts.images;
+    if (!store) throw new ChatError("invalid_request", "This chat cannot receive images");
+    return ids.map((imageId) => {
+      try {
+        const { mediaType, bytes } = store.read(imageId);
+        return { mediaType, data: bytes.toString("base64") };
+      } catch (err) {
+        throw new ChatError("invalid_request", `Image not sent: ${errorMessage(err)}`);
+      }
+    });
   }
 
   /** Runs `build` after the turns already being prepared, then queues its line (unless interrupted or deleted). */
@@ -262,6 +291,12 @@ export class ChatManager {
     const proc = session.proc;
     if (proc?.stopping) {
       // The previous process is exiting (idle timeout): the turn goes to the next one.
+      this.setStatus(session, "starting");
+      return;
+    }
+    if (proc && proc.pendingTurns === 0 && proc.bypass !== this.bypass()) {
+      // The bypass setting changed since this process started: restart it (--resume) with the new mode.
+      void this.stopProcess(proc, { immediate: false });
       this.setStatus(session, "starting");
       return;
     }
@@ -328,12 +363,15 @@ export class ChatManager {
   private spawn(session: ChatSessionState): void {
     const mcp = (this.mcpLaunch ??= this.opts.mcp());
     const record = session.record;
+    const bypass = this.bypass();
     const args = buildChatArgs({
       sessionId: record.id,
       resume: record.started,
       title: record.title ?? UNTITLED_CHAT,
       mcp,
       model: record.model,
+      bypassPermissions: bypass,
+      denyRules: this.opts.pgHome ? secretDenyRules(this.opts.pgHome) : undefined,
     });
     let markExited!: () => void;
     const exited = new Promise<void>((resolve) => (markExited = resolve));
@@ -353,6 +391,7 @@ export class ChatManager {
       streaming: new Map(),
       stderr: "",
       costBase: record.totalCostUsd,
+      bypass,
       stopping: false,
       idleTimer: null,
       killTimers: [],
@@ -491,6 +530,10 @@ export class ChatManager {
       proc.child.kill("SIGTERM");
     }
     return proc.exited;
+  }
+
+  private bypass(): boolean {
+    return this.opts.bypassPermissions?.() ?? false;
   }
 
   private armIdle(session: ChatSessionState, proc: ChatProcess): void {

@@ -62,7 +62,7 @@ export interface ChatStore extends ChatState {
   newSession(req?: CreateChatSessionRequest): Promise<string | null>;
   deleteSession(id: string): Promise<void>;
   /** Sends a user turn on the WS. Returns false when it could not be sent (socket down). */
-  send(sessionId: string, text: string, context: ChatContext): boolean;
+  send(sessionId: string, text: string, context: ChatContext, images?: string[]): boolean;
   interrupt(sessionId: string): void;
   /** Answers a permission prompt; `answers` (keyed by question text) answer an AskUserQuestion prompt. */
   answerPermission(sessionId: string, requestId: string, allow: boolean, message?: string, answers?: Record<string, string>): void;
@@ -293,8 +293,8 @@ export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDe
       removeLocal(id);
     },
 
-    send(sessionId, text, context) {
-      const ok = deps.send({ type: "chat:send", repoId, sessionId, text, context });
+    send(sessionId, text, context, images) {
+      const ok = deps.send({ type: "chat:send", repoId, sessionId, text, context, ...(images?.length ? { images } : {}) });
       // Optimistic: the server confirms with chat:status (starting → thinking) right away.
       if (ok) patchView(sessionId, (v) => (v.status === "idle" || v.status === "exited" || v.status === "error" ? { ...v, status: "thinking", liveStatus: true } : v));
       return ok;

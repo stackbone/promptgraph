@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { stripChatContext, type ChatItem } from "@promptgraph/shared";
+import { ImageMediaTypeSchema, MAX_IMAGES_PER_PROMPT, stripChatContext, type ChatItem } from "@promptgraph/shared";
+import { imageIdOf } from "../images/image-store.js";
 import { ChatNormalizer } from "./normalize.js";
 
 /** Transcripts larger than this are not read back into the chat. */
@@ -80,12 +81,33 @@ export function chatItemsFromTranscript(file: string, cwd?: string): ChatItem[] 
     const parsedTs = typeof line.timestamp === "string" ? Date.parse(line.timestamp) : NaN;
     if (!Number.isNaN(parsedTs)) ts = parsedTs;
     if (line.type === "user") {
-      const userText = userTextOf(line.message?.content);
-      if (userText !== null) items.push({ id: newId(), ts, kind: "user", text: userText });
+      const content = line.message?.content;
+      const userText = userTextOf(content);
+      const images = userImagesOf(content);
+      if (userText !== null || images.length) {
+        items.push({ id: newId(), ts, kind: "user", text: userText ?? "", ...(images.length ? { images } : {}) });
+      }
     }
     for (const event of normalizer.handle(line)) if (event.kind === "item") items.push(event.item);
   }
   return items;
+}
+
+/**
+ * Ids of the images a user message carried (§25). The transcript holds their bytes, and the image store is
+ * content-addressed, so hashing them gives back the ids the message was sent with.
+ */
+function userImagesOf(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  const ids: string[] = [];
+  for (const block of content as unknown[]) {
+    if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "image") continue;
+    const source = (block as { source?: { type?: unknown; media_type?: unknown; data?: unknown } }).source;
+    const type = ImageMediaTypeSchema.safeParse(source?.media_type);
+    if (source?.type !== "base64" || !type.success || typeof source.data !== "string") continue;
+    ids.push(imageIdOf(Buffer.from(source.data, "base64"), type.data));
+  }
+  return ids.slice(0, MAX_IMAGES_PER_PROMPT);
 }
 
 function userTextOf(content: unknown): string | null {

@@ -87,6 +87,9 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     env,
     spawner: daemon.chatSpawner,
     onRateLimit: (info) => daemon.usageLimits.observe(info),
+    images: daemon.images,
+    bypassPermissions: () => daemon.settings.get().bypassPermissions,
+    pgHome: paths.home,
     linkedIssues: createLinkedIssuesResolver({
       graphIssues: (graphId) => graphs.get(graphId).graph.issues ?? [],
       issueContext: (ids) => daemon.linear.issueContext(ids),

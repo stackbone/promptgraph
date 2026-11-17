@@ -3,7 +3,7 @@ import path from "node:path";
 import { API, MCP_TOOL_GROUPS, MCP_TOOL_NAMES, type ChatContext, type ChatItem } from "@promptgraph/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatError, ChatManager, chatTitle, type ChatManagerOptions } from "../src/chat/chat-manager.js";
-import { buildChatArgs, CHAT_PREALLOWED_MCP_TOOLS, CHAT_SYSTEM_PROMPT, chatAllowedTools, resolveChatMcp, type ChatMcpLaunch } from "../src/chat/launch.js";
+import { buildChatArgs, CHAT_DENIED_FILE_TOOLS, CHAT_PREALLOWED_MCP_TOOLS, CHAT_SYSTEM_PROMPT, chatAllowedTools, resolveChatMcp, type ChatMcpLaunch } from "../src/chat/launch.js";
 import { NdjsonParser } from "../src/chat/ndjson.js";
 import { ChatNormalizer, summarizeToolUse, truncateToolResult } from "../src/chat/normalize.js";
 import { permissionResponseLine, userTurnLine } from "../src/chat/protocol.js";
@@ -57,6 +57,24 @@ describe("buildChatArgs", () => {
     }
     expect(tools).not.toContain("Bash");
     expect(tools).not.toContain("Write");
+  });
+
+  it("starts in bypassPermissions mode only when the app setting says so, keeping the stdio prompts", () => {
+    const args = buildChatArgs({ sessionId: "abc", resume: false, title: "x", mcp: MCP, bypassPermissions: true });
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
+    // AskUserQuestion still arrives as a can_use_tool prompt in bypass mode (question cards, §21.4).
+    expect(args[args.indexOf("--permission-prompt-tool") + 1]).toBe("stdio");
+    expect(args).not.toContain("--dangerously-skip-permissions");
+    const off = buildChatArgs({ sessionId: "abc", resume: false, title: "x", mcp: MCP, bypassPermissions: false });
+    expect(off[off.indexOf("--permission-mode") + 1]).toBe("default");
+  });
+
+  it("denies the file-editing tools and passes the secret deny rules as an inline --settings JSON", () => {
+    const args = buildChatArgs({ sessionId: "abc", resume: false, title: "x", mcp: MCP, denyRules: ["Read(//pg)", "Read(//pg/token)"] });
+    expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual({ permissions: { deny: ["Edit", "Write", "NotebookEdit", "Read(//pg)", "Read(//pg/token)"] } });
+    // The file-editing tools are denied in every mode, even without secret rules.
+    const bare = buildChatArgs({ sessionId: "abc", resume: false, title: "x", mcp: MCP });
+    expect(JSON.parse(bare[bare.indexOf("--settings") + 1]!)).toEqual({ permissions: { deny: [...CHAT_DENIED_FILE_TOOLS] } });
   });
 
   it("resumes an existing session, uses --mcp-config without plugin and passes the model", () => {
@@ -690,6 +708,57 @@ describe("ChatManager", () => {
     manager.send("sess-1", "hi", CONTEXT);
     fake.last().emit({ type: "control_request", request_id: "x1", request: { subtype: "mcp_message" } });
     expect(fake.last().writtenJson.at(-1)).toMatchObject({ type: "control_response", response: { subtype: "error", request_id: "x1" } });
+  });
+
+  it("follows the bypass setting: read at spawn, an idle process restarts with --resume when it changes", () => {
+    let bypass = true;
+    manager = makeManager({ bypassPermissions: () => bypass });
+    manager.create();
+    manager.send("sess-1", "first", CONTEXT);
+    const first = fake.last();
+    const mode = (c: FakeChatChild) => c.spec.args[c.spec.args.indexOf("--permission-mode") + 1];
+    expect(mode(first)).toBe("bypassPermissions");
+    first.emit(initLine("sess-1"), ...textTurn("m1", ["a"]), resultLine("success", 0.1));
+
+    // Same setting: the turn goes to the running process.
+    manager.send("sess-1", "second", CONTEXT);
+    expect(fake.children).toHaveLength(1);
+    first.emit(resultLine("success", 0.2));
+
+    bypass = false;
+    manager.send("sess-1", "third", CONTEXT);
+    expect(first.stdinOpen).toBe(false);
+    expect(fake.children).toHaveLength(1);
+    expect(manager.get("sess-1")!.session.status).toBe("starting");
+    first.exit({ code: 0 });
+    expect(fake.children).toHaveLength(2);
+    const second = fake.last();
+    expect(mode(second)).toBe("default");
+    expect(second.spec.args[second.spec.args.indexOf("--resume") + 1]).toBe("sess-1");
+    expect(userContent(second, 0)).toMatch(/\n\nthird$/);
+    expect(kinds()).not.toContain("error");
+  });
+
+  it("denies PG_HOME's secrets to every chat process, in both modes (§7.6)", () => {
+    manager = makeManager({ pgHome: "/home/u/.promptgraph", bypassPermissions: () => true });
+    manager.create();
+    manager.send("sess-1", "hi", CONTEXT);
+    const args = fake.last().spec.args;
+    const deny = (JSON.parse(args[args.indexOf("--settings") + 1]!) as { permissions: { deny: string[] } }).permissions.deny;
+    expect(deny).toEqual(expect.arrayContaining(["Read(//home/u/.promptgraph)", "Read(//home/u/.promptgraph/token)", "Edit(//home/u/.promptgraph/token)"]));
+  });
+
+  it("does not restart a process mid-turn when the bypass setting changes", () => {
+    let bypass = false;
+    manager = makeManager({ bypassPermissions: () => bypass });
+    manager.create();
+    manager.send("sess-1", "first", CONTEXT);
+    const child = fake.last();
+    child.emit(initLine("sess-1"));
+    bypass = true;
+    manager.send("sess-1", "queued", CONTEXT);
+    expect(child.stdinOpen).toBe(true);
+    expect(fake.children).toHaveLength(1);
   });
 
   it("resumes with --resume after the process exited", () => {

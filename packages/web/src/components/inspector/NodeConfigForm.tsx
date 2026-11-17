@@ -97,8 +97,10 @@ function PromptForm({ node, settings, disabled, patch }: FormProps<"prompt">) {
           value={node.config.prompt}
           rows={8}
           disabled={disabled}
-          placeholder="What should Claude do?"
+          placeholder="What should Claude do? Paste images with Ctrl+V."
           onChange={(prompt) => patch({ prompt })}
+          images={node.config.images}
+          onImagesChange={(images) => patch({ images: images.length ? images : undefined })}
         />
       </Field>
       <ClaudeOptions nodeId={node.id} value={node.config} defaults={settings.defaults} disabled={disabled} onChange={patch} />

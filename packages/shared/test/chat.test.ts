@@ -81,6 +81,11 @@ describe("chat schemas", () => {
       "chat:permission",
     );
     expect(ClientMessageSchema.safeParse({ type: "chat:send", repoId: REPO, sessionId: "s", text: "", context: EMPTY_CHAT_CONTEXT }).success).toBe(false);
+    // §25: an image-only message is fine; image ids are content hashes, never paths.
+    const image = `${"a".repeat(64)}.png`;
+    expect(ClientMessageSchema.safeParse({ type: "chat:send", repoId: REPO, sessionId: "s", text: "", images: [image], context: EMPTY_CHAT_CONTEXT }).success).toBe(true);
+    expect(ClientMessageSchema.safeParse({ type: "chat:send", repoId: REPO, sessionId: "s", text: "x", images: ["../token"], context: EMPTY_CHAT_CONTEXT }).success).toBe(false);
+    expect(ClientMessageSchema.safeParse({ type: "chat:send", repoId: REPO, sessionId: "s", text: "x", images: Array(11).fill(image), context: EMPTY_CHAT_CONTEXT }).success).toBe(false);
     expect(ServerMessageSchema.parse({ type: "chat:delta", repoId: REPO, sessionId: "s", messageId: "m", text: "he", offset: 0 }).type).toBe("chat:delta");
     expect(ServerMessageSchema.parse({ type: "chat:status", repoId: REPO, sessionId: "s", status: "thinking" }).type).toBe("chat:status");
     // Chat messages are routed per repository: without one they are invalid.

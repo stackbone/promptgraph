@@ -264,7 +264,7 @@ export class WsHub {
     client.chat = client.chat
       .then(() => this.ctx.registry.activate(msg.repoId))
       .then(({ chat }) => {
-        if (msg.type === "chat:send") chat.send(msg.sessionId, msg.text, msg.context);
+        if (msg.type === "chat:send") chat.send(msg.sessionId, msg.text, msg.context, msg.images);
         else if (msg.type === "chat:interrupt") chat.interrupt(msg.sessionId);
         else chat.answerPermission(msg.sessionId, msg.requestId, msg.allow, msg.message, msg.answers);
       })

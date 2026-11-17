@@ -17,7 +17,7 @@ export const CHAT_SYSTEM_PROMPT = `You are running inside promptgraph's chat pan
 - Never call start_server or open_ui: the server and the UI are already running.
 - Never approve gates; approvals happen in the UI.
 - Ask before destructive tools (delete_graph, cancel_run, cleanup_run).
-- Do not edit repository files or run commands unless the user explicitly asks you to: the real work happens in graph runs.
+- You cannot edit files (no Edit or Write tool): change graphs only with the promptgraph MCP tools. Do not write files with shell commands either, and run commands only when the user explicitly asks you to: the real work happens in graph runs.
 - Ask with the AskUserQuestion tool, not in plain text, whenever the user has to choose: the panel shows it as a card with clickable options (each option needs a short label and a one-line description; the user can always type their own answer). Ask up to 4 questions in one call, 2-4 options each, the recommended option first with " (Recommended)" after its label.
 - Planning a new graph: before you draft anything, ask one AskUserQuestion call. Always include the complexity of the graph, with these options: "Simple" (2-4 sequential steps, no loops), "Standard" (5-8 steps with a test-fix loop or a review), "Complex" (parallel lanes in separate worktrees joined by a merge, review loops and approval gates). Add only the questions the user's message and the repository do not answer yet, e.g. how the result is checked (the test command you found, a review step, none), how it ends (commit only, a PR behind an approval, a merge into a branch), parallelism. Then follow the design-graph skill at the depth chosen: show the outline and save.
 - Skip the questions when the user asked for one specific change to the graph on screen, or already said everything they would answer.
@@ -50,7 +50,7 @@ export const CHAT_PREALLOWED_MCP_TOOLS = [
 
 /**
  * Tool names for --allowedTools: the pre-allowed promptgraph MCP tools by full name for the given prefix.
- * No built-in read tools: in --permission-mode default Claude Code already reads inside the cwd (the repo)
+ * No built-in read tools: in --permission-mode default (bypass off) Claude Code already reads inside the cwd (the repo)
  * without asking, and a bare `Read` / `Grep` / `Glob` / `LS` rule would also silence the prompt for paths
  * outside it (~/.ssh, ~/.promptgraph, other repos).
  */
@@ -144,6 +144,13 @@ function writeLauncher(binDir: string, nodePath: string, nodeArgs: readonly stri
   return file;
 }
 
+/**
+ * File-editing tools the chat never gets, in any mode (DESIGN §21.2): it changes only `.promptgraph/`, and only
+ * through the promptgraph MCP tools (`save_graph`, `patch_graph`), which validate the graph. Deny rules hold in
+ * `bypassPermissions` mode and remove the tools from Claude's tool list. Bash is not contained by them.
+ */
+export const CHAT_DENIED_FILE_TOOLS = ["Edit", "Write", "NotebookEdit"] as const;
+
 export interface ChatArgsInput {
   sessionId: string;
   /** --resume <sessionId> instead of --session-id (Claude Code already has the session). */
@@ -152,14 +159,27 @@ export interface ChatArgsInput {
   mcp: Pick<ChatMcpLaunch, "pluginDir" | "mcpConfig" | "toolPrefix">;
   model?: string | null;
   systemPrompt?: string;
+  /** The app setting `bypassPermissions` (DESIGN §7.6, §21.2): start in Claude Code's `bypassPermissions` mode. */
+  bypassPermissions?: boolean;
+  /**
+   * `permissions.deny` rules for promptgraph's secrets (`secretDenyRules`, DESIGN §7.6), passed as an inline
+   * `--settings` JSON. Deny rules hold in `bypassPermissions` mode too, so a chat cannot read the token silently.
+   */
+  denyRules?: readonly string[];
 }
 
-/** `claude` arguments for a chat process (DESIGN §21.2). Never bypassPermissions (invariant 5). */
+/**
+ * `claude` arguments for a chat process (DESIGN §21.2). `default` mode, or `bypassPermissions` only when the user's
+ * app setting is on (invariant 5). `--permission-prompt-tool stdio` stays in both: `AskUserQuestion` still arrives
+ * as a `can_use_tool` prompt in bypass mode, so the question cards keep working.
+ */
 export function buildChatArgs(input: ChatArgsInput): string[] {
   const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
   args.push(input.resume ? "--resume" : "--session-id", input.sessionId);
   args.push("--name", `pg:chat/${input.title}`);
-  args.push("--permission-mode", "default", "--permission-prompt-tool", "stdio");
+  const deny = [...CHAT_DENIED_FILE_TOOLS, ...(input.denyRules ?? [])];
+  args.push("--settings", JSON.stringify({ permissions: { deny } }));
+  args.push("--permission-mode", input.bypassPermissions ? "bypassPermissions" : "default", "--permission-prompt-tool", "stdio");
   if (input.mcp.pluginDir) args.push("--plugin-dir", input.mcp.pluginDir);
   else if (input.mcp.mcpConfig) args.push("--mcp-config", input.mcp.mcpConfig);
   args.push("--append-system-prompt", input.systemPrompt ?? CHAT_SYSTEM_PROMPT);

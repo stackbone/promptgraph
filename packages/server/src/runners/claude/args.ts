@@ -15,6 +15,8 @@ export interface ClaudeLaunchSpec {
   model?: string;
   effort?: Effort;
   allowedTools?: string[];
+  /** `--add-dir <dir>`: extra directories Claude may read, e.g. the node run's pasted images (§25). */
+  addDirs?: string[];
 }
 
 /**
@@ -31,7 +33,7 @@ export function toCliPermissionMode(mode: LaunchPermissionMode): string {
 /**
  * argv for an interactive claude (§7.1):
  * [message, --session-id <id> | --resume <id>, --name, --settings, --permission-mode, --model?, --effort?,
- *  --allowedTools <t>...?]. The message comes first so a slash command is recognised (SPIKE A1).
+ *  --add-dir=<dir>...?, --allowedTools <t>...?]. The message comes first so a slash command is recognised (SPIKE A1).
  */
 export function buildClaudeArgs(spec: ClaudeLaunchSpec): string[] {
   // Session ids go into argv: never let one look like an option (`--resume` takes an optional value).
@@ -46,6 +48,8 @@ export function buildClaudeArgs(spec: ClaudeLaunchSpec): string[] {
   args.push("--name", spec.name, "--settings", spec.settingsPath, "--permission-mode", toCliPermissionMode(spec.permissionMode));
   if (spec.model) args.push("--model", spec.model);
   if (spec.effort) args.push("--effort", spec.effort);
+  for (const dir of spec.addDirs ?? []) args.push(`--add-dir=${dir}`);
+  // Last: --allowedTools takes every following value.
   if (spec.allowedTools?.length) args.push("--allowedTools", ...spec.allowedTools);
   return args;
 }

@@ -1,4 +1,4 @@
-import type { ClaudeNode, CompletionPolicy } from "@promptgraph/shared";
+import { imageLabel, type ClaudeNode, type CompletionPolicy } from "@promptgraph/shared";
 import { truncate } from "../../util/text.js";
 import type { PredecessorOutput } from "../types.js";
 
@@ -14,15 +14,30 @@ export function markerInstruction(token: string): string {
 }
 
 /**
+ * Tells Claude about the images pasted into a prompt node (§25), copied to `paths` (absolute, in order). Claude reads
+ * each with its Read tool, which shows it the image.
+ */
+export function imagesInstruction(paths: readonly string[]): string {
+  const lines = paths.map((p, i) => `- ${imageLabel(i)}: ${p}`);
+  return `The user attached ${paths.length === 1 ? "an image" : `${paths.length} images`} to this prompt. Look at ${paths.length === 1 ? "it" : "each one"} with the Read tool before you start:\n${lines.join("\n")}`;
+}
+
+/**
  * Initial message for a Claude node:
  * - command node: the slash command line itself (context is not prepended); in marker mode the
  *   instruction follows on its own paragraph and reaches the model as part of the command's arguments;
  * - prompt + "fresh": "Context from previous steps" block (each predecessor's output text, or its
  *   error/exit code/stdout tail for failed ones, truncated to CONTEXT_OUTPUT_LIMIT) + the prompt;
  * - prompt + "clean" / "resume": the prompt only;
+ * - prompt with pasted images: imagesInstruction after the prompt;
  * - completion "marker": markerInstruction appended.
  */
-export function buildInitialMessage(node: ClaudeNode, predecessors: PredecessorOutput[], completion: CompletionPolicy): string {
+export function buildInitialMessage(
+  node: ClaudeNode,
+  predecessors: PredecessorOutput[],
+  completion: CompletionPolicy,
+  imagePaths: readonly string[] = [],
+): string {
   const marker = completion.mode === "marker" ? markerInstruction(completion.token) : null;
   if (node.type === "command") return [node.config.command.trim(), marker].filter((p) => p !== null).join("\n\n");
   const parts: string[] = [];
@@ -31,6 +46,7 @@ export function buildInitialMessage(node: ClaudeNode, predecessors: PredecessorO
     parts.push(`Context from previous steps:\n\n${blocks.join("\n\n")}\n\n---`);
   }
   parts.push(node.config.prompt.trim());
+  if (imagePaths.length) parts.push(imagesInstruction(imagePaths));
   if (marker) parts.push(marker);
   return parts.join("\n\n");
 }
