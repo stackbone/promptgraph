@@ -247,8 +247,8 @@ describe("Overview (DESIGN §13.3)", () => {
     fireEvent.change(within(add).getByRole("combobox", { name: "Repository path" }), { target: { value: "/nope/x" } });
     fireEvent.click(within(add).getByRole("button", { name: /Browse/ }));
     const dialog = await screen.findByRole("dialog", { name: "Choose a repository folder" });
-    fireEvent.click(await within(dialog).findByRole("button", { name: /work/ }));
-    fireEvent.click(await within(dialog).findByRole("button", { name: /new/ }));
+    fireEvent.click(await within(dialog).findByRole("option", { name: /work/ }));
+    fireEvent.click(await within(dialog).findByRole("option", { name: /new/ }));
     expect(await within(dialog).findByText("This folder is a git repository.")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Add this folder" }));
     await waitFor(() => expect(navigations).toEqual(["/r/new-0000cafe"]));

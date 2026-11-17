@@ -1,7 +1,8 @@
 import type { ListDirsResponse } from "@promptgraph/shared";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { fuzzyFilter } from "@/lib/fuzzy";
 import { cn } from "@/lib/utils";
 import { daemonApi, errorMessage } from "../../api/rest";
 import { Icons } from "../common/icons";
@@ -170,13 +171,21 @@ function GitBadge() {
  * Folder browser of Home's "Add repository" (DESIGN §13.3), served by the daemon (`GET /api/fs/dirs`), so
  * it works the same in a browser and in the desktop shell. Starts at `initialPath` (home when empty or
  * unreadable); a click on a folder enters it; "Add this folder" hands the current folder to `onSelect`.
+ *
+ * Typing filters the folders like VS Code's quick open: fuzzy matches, best first, the best one highlighted.
+ * ↑/↓ move the highlight, Enter enters the highlighted folder, Backspace in an empty filter goes to the parent,
+ * Ctrl/Cmd+Enter adds the current folder.
  */
 export function FolderBrowser({ initialPath, onSelect, onClose }: { initialPath?: string; onSelect: (path: string) => void; onClose: () => void }) {
   const [data, setData] = useState<ListDirsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hidden, setHidden] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(-1);
   const seq = useRef(0);
+  const listId = useId();
+  const filterRef = useRef<HTMLInputElement>(null);
 
   const load = (path: string | undefined, showHidden = hidden, fallbackHome = false) => {
     const n = ++seq.current;
@@ -187,6 +196,10 @@ export function FolderBrowser({ initialPath, onSelect, onClose }: { initialPath?
         setData(res);
         setError(null);
         setLoading(false);
+        setQuery("");
+        setActive(-1);
+        // Keep typing working after a click on a folder, a breadcrumb or "Show hidden".
+        filterRef.current?.focus();
       },
       (err: unknown) => {
         if (n !== seq.current) return;
@@ -204,6 +217,41 @@ export function FolderBrowser({ initialPath, onSelect, onClose }: { initialPath?
   }, []);
 
   const crumbs = data ? breadcrumbs(data.path, data.home) : [];
+  const results = data ? fuzzyFilter(data.entries, query.trim(), (e) => e.name) : [];
+
+  useEffect(() => {
+    if (active >= 0) document.getElementById(`${listId}-opt-${active}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [active, listId]);
+
+  const onFilterChange = (value: string) => {
+    setQuery(value);
+    // Like quick open: while filtering, the best match is highlighted so Enter takes it.
+    setActive(value.trim() ? 0 : -1);
+  };
+
+  const onFilterKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (results.length === 0) return;
+      const last = results.length - 1;
+      setActive((i) => (e.key === "ArrowDown" ? (i >= last ? 0 : i + 1) : i <= 0 ? last : i - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        if (data) onSelect(data.path);
+      } else if (active >= 0 && results[active]) {
+        load(results[active].item.path);
+      }
+    } else if (e.key === "Backspace" && query === "" && data?.parent) {
+      e.preventDefault();
+      load(data.parent);
+    } else if (e.key === "Escape") {
+      // The dialog leaves Escape to an expanded combobox: clear the filter first, close when it is empty.
+      e.preventDefault();
+      if (query) onFilterChange("");
+      else onClose();
+    }
+  };
 
   return (
     <Modal
@@ -265,21 +313,45 @@ export function FolderBrowser({ initialPath, onSelect, onClose }: { initialPath?
         )}
         {data?.isGitRepo && <p className="text-xs text-emerald-700">This folder is a git repository.</p>}
 
-        <ul aria-label="Folders" aria-busy={loading} className="h-80 overflow-y-auto rounded-md border">
+        <Input
+          ref={filterRef}
+          type="search"
+          autoFocus
+          role="combobox"
+          aria-label="Filter folders"
+          aria-autocomplete="list"
+          aria-expanded
+          aria-controls={listId}
+          aria-activedescendant={active >= 0 && results[active] ? `${listId}-opt-${active}` : undefined}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="Type to find a folder · Enter opens it · Ctrl+Enter adds the current folder"
+          value={query}
+          onChange={(e) => onFilterChange(e.target.value)}
+          onKeyDown={onFilterKeyDown}
+          className="font-mono text-xs"
+        />
+
+        <ul id={listId} role="listbox" aria-label="Folders" aria-busy={loading} className="h-80 overflow-y-auto rounded-md border py-1">
           {data && data.entries.length === 0 && <li className="px-3 py-2 text-xs text-muted-foreground">No subfolders.</li>}
+          {data && data.entries.length > 0 && results.length === 0 && <li className="px-3 py-2 text-xs text-muted-foreground">No folder matches “{query.trim()}”.</li>}
           {!data && !error && <li className="px-3 py-2 text-xs text-muted-foreground">Loading…</li>}
-          {data?.entries.map((e) => (
-            <li key={e.path}>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs hover:bg-accent"
-                onClick={() => load(e.path)}
-                title={e.path}
-              >
-                <Icons.folder className="shrink-0 text-muted-foreground" />
-                <span className="truncate">{e.name}</span>
-                {e.isGitRepo && <GitBadge />}
-              </button>
+          {results.map(({ item: e, match }, i) => (
+            <li
+              key={e.path}
+              id={`${listId}-opt-${i}`}
+              role="option"
+              aria-selected={i === active}
+              title={e.path}
+              // mousedown, not click, keeps the focus in the filter.
+              onMouseDown={(ev) => ev.preventDefault()}
+              onClick={() => load(e.path)}
+              onMouseEnter={() => setActive(i)}
+              className={cn("flex cursor-pointer items-center gap-2 px-3 py-1.5 font-mono text-xs", i === active && "bg-accent text-accent-foreground")}
+            >
+              <Icons.folder className="shrink-0 text-muted-foreground" />
+              <span className="truncate">{highlightMatch(e.name, match.indices)}</span>
+              {e.isGitRepo && <GitBadge />}
             </li>
           ))}
         </ul>
@@ -289,6 +361,38 @@ export function FolderBrowser({ initialPath, onSelect, onClose }: { initialPath?
       </div>
     </Modal>
   );
+}
+
+/** `text` with the characters at `indices` emphasised (the fuzzy-matched part of a folder name). */
+function highlightMatch(text: string, indices: number[]): ReactNode {
+  if (indices.length === 0) return text;
+  const marked = new Set(indices);
+  const parts: ReactNode[] = [];
+  let run = "";
+  let runMarked = false;
+  const flush = (key: number) => {
+    if (!run) return;
+    parts.push(
+      runMarked ? (
+        <mark key={key} className="bg-transparent font-semibold text-primary">
+          {run}
+        </mark>
+      ) : (
+        run
+      ),
+    );
+    run = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const m = marked.has(i);
+    if (m !== runMarked) {
+      flush(i);
+      runMarked = m;
+    }
+    run += text[i];
+  }
+  flush(text.length);
+  return parts;
 }
 
 /** Clickable segments of `path`; under the home directory it starts at `~`. */
