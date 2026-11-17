@@ -4,6 +4,7 @@ import { mergeInputLabels } from "../../lib/lanes";
 import { getRepoCache } from "../../store/repo-cache";
 import { useEditor, useRepo, useView } from "../../store/view/context";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea, parseEnv } from "../common/fields";
+import { DictationTextArea } from "../common/DictationTextArea";
 import { Icons } from "../common/icons";
 import { Checkbox, Field } from "../common/ui";
 import { ClaudeOptions } from "./ClaudeOptions";
@@ -54,7 +55,14 @@ function LinearForm({ node, settings, disabled, patch }: FormProps<"linear">) {
   return (
     <div className="space-y-3">
       <Field label="Instructions" hint={custom ? "Custom instructions." : "The default instructions; edit them to override."}>
-        <TextArea value={node.config.prompt ?? DEFAULT_LINEAR_UPDATE_PROMPT} rows={8} disabled={disabled} onChange={setPrompt} />
+        <DictationTextArea
+          owner={`instructions:${node.id}`}
+          aria-label="Instructions"
+          value={node.config.prompt ?? DEFAULT_LINEAR_UPDATE_PROMPT}
+          rows={8}
+          disabled={disabled}
+          onChange={setPrompt}
+        />
       </Field>
       {custom && (
         <button type="button" disabled={disabled} className="text-[11px] text-blue-600 hover:underline disabled:opacity-50" onClick={() => patch({ prompt: undefined })}>
@@ -83,7 +91,15 @@ function PromptForm({ node, settings, disabled, patch }: FormProps<"prompt">) {
   return (
     <div className="space-y-3">
       <Field label="Prompt">
-        <TextArea value={node.config.prompt} rows={8} disabled={disabled} placeholder="What should Claude do?" onChange={(prompt) => patch({ prompt })} />
+        <DictationTextArea
+          owner={`prompt:${node.id}`}
+          aria-label="Prompt"
+          value={node.config.prompt}
+          rows={8}
+          disabled={disabled}
+          placeholder="What should Claude do?"
+          onChange={(prompt) => patch({ prompt })}
+        />
       </Field>
       <ClaudeOptions nodeId={node.id} value={node.config} defaults={settings.defaults} disabled={disabled} onChange={patch} />
     </div>

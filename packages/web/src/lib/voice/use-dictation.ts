@@ -6,18 +6,23 @@ import { dictationKeyterms } from "./keyterms";
 import { insertTranscript } from "./pcm";
 
 /**
- * Composer side of voice dictation (DESIGN §22.6), with Claude Code's /voice UX:
+ * Text-field side of voice dictation (DESIGN §22.6), used by the chat composer and the prompt fields, with Claude
+ * Code's /voice UX:
  * - Space on an empty composer: hold mode = hold while speaking, release ends; tap mode = press to start and stop.
  * - Alt+Space at any time (also with text): same, in the configured mode.
  * - Mic button: press and hold = hold, click = tap toggle.
  * - Esc cancels: the composer keeps the text it had (the partial transcript is a preview, never part of the value).
- * - The final transcript is inserted at the cursor saved when the recording started; it is sent only with autoSubmit.
+ * - The final transcript is inserted at the cursor saved when the recording started; it is sent only with autoSubmit
+ *   (fields without `submit` never send).
+ * The voice store holds one recording for the whole app: a field only shows the recording, error and notice it owns.
  */
 
 /** A mic-button press at least this long is a hold (released = stop); shorter is a click (tap toggle). */
 export const HOLD_THRESHOLD_MS = 350;
 
 export interface UseDictationOptions {
+  /** Identifies this text field in the voice store; unique among the fields mounted at the same time. */
+  owner: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   value: string;
   setValue: (value: string) => void;
@@ -25,8 +30,8 @@ export interface UseDictationOptions {
    * Sends the composer value (autoSubmit). Returns false when it cannot send right now (Claude is still replying,
    * a send is in flight): the transcript then stays in the composer with a notice.
    */
-  submit: (value: string) => boolean;
-  /** The chat cannot be used (socket down): no dictation. */
+  submit?: (value: string) => boolean;
+  /** The field cannot be used (socket down, read-only): no dictation. */
   disabled: boolean;
 }
 
@@ -64,14 +69,16 @@ function isSpace(e: KeyboardEvent): boolean {
   return e.code === "Space" || e.key === " ";
 }
 
-export function useDictation({ inputRef, value, setValue, submit, disabled }: UseDictationOptions): Dictation {
+export function useDictation({ owner, inputRef, value, setValue, submit, disabled }: UseDictationOptions): Dictation {
   const { editor } = useView();
-  const state = useVoiceStore((s) => s.state);
-  const partial = useVoiceStore((s) => s.partial);
-  const level = useVoiceStore((s) => s.level);
-  const elapsedMs = useVoiceStore((s) => s.elapsedMs);
-  const error = useVoiceStore((s) => s.error);
-  const notice = useVoiceStore((s) => s.notice);
+  // Another field's recording reads as idle here (and its partial, level, error, notice as empty).
+  const mine = useVoiceStore((s) => s.owner === owner);
+  const state = useVoiceStore((s) => (s.owner === owner ? s.state : "idle"));
+  const partial = useVoiceStore((s) => (s.owner === owner ? s.partial : ""));
+  const level = useVoiceStore((s) => (s.owner === owner ? s.level : 0));
+  const elapsedMs = useVoiceStore((s) => (s.owner === owner ? s.elapsedMs : 0));
+  const error = useVoiceStore((s) => (s.owner === owner ? s.error : null));
+  const notice = useVoiceStore((s) => (s.owner === owner ? s.notice : null));
   const status = useVoiceStore((s) => s.status);
   const active = isDictationActive(state);
   const mode: VoiceMode = status?.mode ?? "hold";
@@ -96,12 +103,16 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
     void useVoiceStore.getState().loadStatus();
   }, []);
 
-  // Unmounting the composer (panel closed, session switched) drops a recording in progress.
+  const ownerRef = useRef(owner);
+  ownerRef.current = owner;
+  // Unmounting the field (panel closed, session switched), or the field becoming another one (the inspector shows
+  // another node), drops its recording in progress: the transcript must not land in the wrong text.
   useEffect(
     () => () => {
-      if (isDictationActive(useVoiceStore.getState().state)) useVoiceStore.getState().cancel();
+      const s = useVoiceStore.getState();
+      if (s.owner === owner && isDictationActive(s.state)) s.cancel();
     },
-    [],
+    [owner],
   );
 
   // Releasing a held key outside the page (focus lost) never fires keyup here. While the browser still asks for
@@ -110,7 +121,8 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
     const onBlur = () => {
       if (!holding.current) return;
       holding.current = null;
-      if (useVoiceStore.getState().state !== "requesting_mic") useVoiceStore.getState().stop();
+      const s = useVoiceStore.getState();
+      if (s.owner === ownerRef.current && s.state !== "requesting_mic") useVoiceStore.getState().stop();
     };
     window.addEventListener("blur", onBlur);
     return () => window.removeEventListener("blur", onBlur);
@@ -133,6 +145,11 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
       let current = useVoiceStore.getState().status;
       if (!current?.available) current = await useVoiceStore.getState().loadStatus(!current?.available);
       if (seq !== beginSeq.current) return;
+      // Another field is recording: one recording at a time.
+      if (isDictationActive(useVoiceStore.getState().state)) {
+        holding.current = null;
+        return;
+      }
       if (!current?.available) {
         holding.current = null;
         setUnavailableOpen(true);
@@ -147,6 +164,7 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
       const at = { start, end };
       setInsertion(at);
       const started = await useVoiceStore.getState().start({
+        owner,
         mode: recordMode,
         keyterms: dictationKeyterms(editor.getState().graph),
         onFinal: (text, result) => {
@@ -155,7 +173,8 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
           const next = insertTranscript(valueRef.current, at.start, at.end, text);
           pendingCaret.current = next.caret;
           setValueRef.current(next.value);
-          if (result.autoSubmit && !submitRef.current(next.value)) {
+          const send = submitRef.current;
+          if (result.autoSubmit && send && !send(next.value)) {
             useVoiceStore.getState().setNotice("Not sent automatically: Claude is still busy. Press Enter to send it.");
           }
         },
@@ -165,20 +184,21 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
         setInsertion(null);
       }
     },
-    [disabled, inputRef],
+    [disabled, inputRef, owner],
   );
 
+  // Both only touch the store when this field owns the recording, never another field's.
   const stop = useCallback(() => {
     beginSeq.current++;
     holding.current = null;
-    useVoiceStore.getState().stop();
+    if (useVoiceStore.getState().owner === ownerRef.current) useVoiceStore.getState().stop();
   }, []);
 
   const cancel = useCallback(() => {
     beginSeq.current++;
     holding.current = null;
     setInsertion(null);
-    useVoiceStore.getState().cancel();
+    if (useVoiceStore.getState().owner === ownerRef.current) useVoiceStore.getState().cancel();
   }, []);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
@@ -316,6 +336,8 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
     onKeyUp,
     micHandlers,
     cancel,
-    dismiss: () => useVoiceStore.getState().dismiss(),
+    dismiss: () => {
+      if (mine) useVoiceStore.getState().dismiss();
+    },
   };
 }

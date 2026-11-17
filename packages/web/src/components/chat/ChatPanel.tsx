@@ -355,6 +355,7 @@ function Composer({ sessionId, status }: { sessionId: string; status: ChatStatus
   };
 
   const dictation = useDictation({
+    owner: "chat",
     inputRef,
     value: text,
     setValue: setText,

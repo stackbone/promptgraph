@@ -1,6 +1,6 @@
 import type { VoiceUnavailableReason } from "@promptgraph/shared";
 import { MicIcon, MicOffIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -11,7 +11,10 @@ import { useVoiceStore } from "../../store/voice-store";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 
-/** Voice dictation pieces of the chat composer (DESIGN §22.6): mic button, unavailable popover, preview, status. */
+/**
+ * Voice dictation pieces of the text fields that offer it (DESIGN §22.6): mic button, unavailable popover, preview,
+ * status. Used by the chat composer and by DictationTextArea (the prompt fields).
+ */
 
 export const REASON_TEXT: Record<VoiceUnavailableReason, string> = {
   binary_not_found: "whisper.cpp (whisper-cli) was not found.",
@@ -23,13 +26,14 @@ export function shortcutHint(mode: "hold" | "tap"): string {
   return mode === "hold" ? "Hold to dictate, or hold Space on an empty message / Alt+Space" : "Click to dictate, or press Space on an empty message / Alt+Space";
 }
 
-export function MicButton({ dictation, disabled }: { dictation: Dictation; disabled: boolean }) {
+export function MicButton({ dictation, disabled, disabledReason, size = "icon" }: { dictation: Dictation; disabled: boolean; disabledReason?: string; size?: "icon" | "icon-sm" }) {
   const { state, active, level, elapsedMs, mode } = dictation;
   const recording = state === "recording";
   const unavailable = useVoiceStore((s) => s.status !== null && !s.status.available);
+  const reasonId = useId();
   const label = active ? (state === "transcribing" ? "Transcribing dictation" : "Stop dictation") : "Dictate";
   const tooltip = disabled
-    ? "Dictation needs the connection to the promptgraph server"
+    ? (disabledReason ?? "Dictation needs the connection to the promptgraph server")
     : active
       ? state === "transcribing"
         ? "Transcribing…"
@@ -50,14 +54,14 @@ export function MicButton({ dictation, disabled }: { dictation: Dictation; disab
               <TooltipTrigger asChild>
                 <Button
                   variant={active ? "danger" : "ghost"}
-                  size="icon"
+                  size={size}
                   aria-label={label}
                   aria-pressed={active}
                   aria-keyshortcuts="Alt+Space"
                   // aria-disabled, not disabled: a disabled button gets no hover/focus, so the tooltip saying why
                   // could never open. The handlers ignore input while disabled.
                   aria-disabled={disabled || undefined}
-                  aria-describedby={disabled ? "dictation-disabled-reason" : undefined}
+                  aria-describedby={disabled ? reasonId : undefined}
                   className={cn(
                     "relative touch-none overflow-hidden select-none",
                     !active && "text-muted-foreground",
@@ -80,7 +84,7 @@ export function MicButton({ dictation, disabled }: { dictation: Dictation; disab
               <TooltipContent>{tooltip}</TooltipContent>
             </Tooltip>
             {disabled && (
-              <span id="dictation-disabled-reason" className="sr-only">
+              <span id={reasonId} className="sr-only">
                 {tooltip}
               </span>
             )}
@@ -197,11 +201,14 @@ export function DictationPreview({
   insertion,
   partial,
   textarea,
+  className,
 }: {
   value: string;
   insertion: { start: number; end: number };
   partial: string;
   textarea: HTMLTextAreaElement | null;
+  /** Box classes matching the textarea's (size, padding, font); defaults to the chat composer's. */
+  className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const partialRef = useRef<HTMLSpanElement>(null);
@@ -222,7 +229,10 @@ export function DictationPreview({
       ref={ref}
       aria-hidden="true"
       data-testid="dictation-preview"
-      className="pointer-events-none relative [grid-area:1/1] max-h-48 min-h-14 overflow-hidden rounded-lg border border-transparent px-2.5 py-2 text-sm break-words whitespace-pre-wrap"
+      className={cn(
+        "pointer-events-none relative [grid-area:1/1] overflow-hidden rounded-lg border border-transparent px-2.5 py-2 break-words whitespace-pre-wrap",
+        className ?? "max-h-48 min-h-14 text-sm",
+      )}
     >
       {before}
       <span ref={partialRef} className="text-muted-foreground italic">

@@ -16,9 +16,10 @@ import { micErrorFrom, startMicCapture, type CaptureHandle, type StartCapture } 
 import { SPEECH_RMS_THRESHOLD } from "../lib/voice/pcm";
 
 /**
- * Voice dictation in the chat composer (DESIGN §22): the status from GET /api/voice and the state machine of one
- * recording. Audio goes to the server as binary WS frames; voice:partial / voice:final / voice:error come back
- * through handleServerMessage. One recording at a time (the server allows one per WS client too).
+ * Voice dictation (DESIGN §22): the status from GET /api/voice and the state machine of one recording. Audio goes
+ * to the server as binary WS frames; voice:partial / voice:final / voice:error come back through
+ * handleServerMessage. One recording at a time (the server allows one per WS client too), shared by every text field
+ * that offers dictation (the chat composer, the prompt fields): `owner` says which one it belongs to.
  *
  *   idle → requesting_mic → recording → transcribing → idle
  *                 ↘ error         ↘ (cancel) idle   ↘ error
@@ -34,6 +35,8 @@ export interface DictationResult {
 }
 
 export interface StartDictationOptions {
+  /** The text field that starts the recording (see VoiceState.owner). */
+  owner: string;
   mode: VoiceMode;
   keyterms?: readonly string[];
   /** Receives the final transcript (possibly empty) once. Not called after cancel or on error. */
@@ -84,6 +87,11 @@ export interface VoiceState {
   voiceId: string | null;
   /** Mode of the recording in progress. */
   mode: VoiceMode | null;
+  /**
+   * The text field that started the last recording. Kept after it ends, so its error or notice is shown by that
+   * field only; null until the first recording.
+   */
+  owner: string | null;
   /** Latest voice:partial (the whole transcript so far). */
   partial: string;
   /** RMS level of the last audio block (0..1). */
@@ -121,6 +129,7 @@ const initial: VoiceState = {
   state: "idle",
   voiceId: null,
   mode: null,
+  owner: null,
   partial: "",
   level: 0,
   startedAt: null,
@@ -189,7 +198,7 @@ export const useVoiceStore = create<VoiceStore>()((set, get) => ({
     const my = ++attempt;
     const voiceId = deps.newId();
     onFinal = opts.onFinal;
-    set({ state: "requesting_mic", voiceId, mode: opts.mode, partial: "", level: 0, startedAt: null, elapsedMs: 0, error: null, notice: null });
+    set({ state: "requesting_mic", voiceId, mode: opts.mode, owner: opts.owner, partial: "", level: 0, startedAt: null, elapsedMs: 0, error: null, notice: null });
 
     // Frames captured before voice:start is on the wire wait here, so the server never sees orphan audio.
     let streaming = false;

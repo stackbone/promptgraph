@@ -67,7 +67,7 @@ describe("voice store", () => {
 
   it("starts: voice:start with sanitized keyterms, then streams binary frames", async () => {
     const t = setup();
-    const started = await store().start({ mode: "hold", keyterms: ["promptgraph", " Promptgraph ", "commit"], onFinal });
+    const started = await store().start({ owner: "chat", mode: "hold", keyterms: ["promptgraph", " Promptgraph ", "commit"], onFinal });
     expect(started).toBe(true);
     expect(store().state).toBe("recording");
     expect(t.sent).toEqual([{ type: "voice:start", voiceId: "v1", sampleRate: 16000, keyterms: ["promptgraph", "commit"] }]);
@@ -80,7 +80,7 @@ describe("voice store", () => {
   it("sends frames captured before voice:start only after it", async () => {
     const t = setup();
     t.defer();
-    const p = store().start({ mode: "tap", onFinal });
+    const p = store().start({ owner: "chat", mode: "tap", onFinal });
     await Promise.resolve();
     expect(store().state).toBe("requesting_mic");
     t.captures[0]!.callbacks.onChunk(new Uint8Array(3200));
@@ -93,7 +93,7 @@ describe("voice store", () => {
 
   it("replaces the partial and delivers the final transcript once", async () => {
     setup();
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().applyServerMessage({ type: "voice:partial", voiceId: "v1", text: "add a" });
     store().applyServerMessage({ type: "voice:partial", voiceId: "v1", text: "add a commit" });
     expect(store().partial).toBe("add a commit");
@@ -110,7 +110,7 @@ describe("voice store", () => {
 
   it("stop flushes the last frame, releases the mic and sends voice:stop", async () => {
     const t = setup();
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().stop();
     expect(t.captures[0]!.stop).toHaveBeenCalledTimes(1);
     expect(t.binary).toEqual([10]);
@@ -120,7 +120,7 @@ describe("voice store", () => {
   it("passes autoSubmit from the status", async () => {
     setup();
     useVoiceStore.setState({ status: { ...READY_STATUS, autoSubmit: true } });
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().stop();
     store().applyServerMessage({ type: "voice:final", voiceId: "v1", text: "ship it" });
     expect(onFinal).toHaveBeenCalledWith("ship it", { truncated: false, autoSubmit: true });
@@ -128,7 +128,7 @@ describe("voice store", () => {
 
   it("ignores messages of another recording", async () => {
     setup();
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().applyServerMessage({ type: "voice:partial", voiceId: "old", text: "stale" });
     store().applyServerMessage({ type: "voice:final", voiceId: "old", text: "stale" });
     expect(store().partial).toBe("");
@@ -138,7 +138,7 @@ describe("voice store", () => {
 
   it("cancel sends voice:cancel, releases the mic and never delivers a transcript", async () => {
     const t = setup();
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().cancel();
     expect(t.sent.at(-1)).toEqual({ type: "voice:cancel", voiceId: "v1" });
     expect(t.captures[0]!.stop).toHaveBeenCalled();
@@ -152,7 +152,7 @@ describe("voice store", () => {
   it("cancel while the browser asks for the mic releases it once granted, without voice:start", async () => {
     const t = setup();
     t.defer();
-    const p = store().start({ mode: "hold", onFinal });
+    const p = store().start({ owner: "chat", mode: "hold", onFinal });
     await Promise.resolve();
     store().stop(); // = cancel while requesting_mic
     expect(store().state).toBe("idle");
@@ -164,7 +164,7 @@ describe("voice store", () => {
 
   it("explains a denied microphone", async () => {
     setup({ captureError: new MicError("denied", "Microphone access was denied.") });
-    expect(await store().start({ mode: "hold", onFinal })).toBe(false);
+    expect(await store().start({ owner: "chat", mode: "hold", onFinal })).toBe(false);
     expect(store().state).toBe("error");
     expect(store().error).toMatch(/denied/);
     store().dismiss();
@@ -173,13 +173,13 @@ describe("voice store", () => {
 
   it("maps a DOMException NotAllowedError to the permission message", async () => {
     setup({ captureError: Object.assign(new Error("Permission denied"), { name: "NotAllowedError" }) });
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     expect(store().error).toMatch(/Microphone access was denied/);
   });
 
   it("fails cleanly when the socket is down", async () => {
     const t = setup({ connected: false });
-    expect(await store().start({ mode: "hold", onFinal })).toBe(false);
+    expect(await store().start({ owner: "chat", mode: "hold", onFinal })).toBe(false);
     expect(store().state).toBe("error");
     expect(t.captures[0]!.stop).toHaveBeenCalled();
   });
@@ -188,7 +188,7 @@ describe("voice store", () => {
     const getStatus = vi.fn(async () => ({ ...READY_STATUS, available: false, reason: "model_not_found" as const }));
     setup();
     setVoiceDeps({ getStatus });
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().applyServerMessage({ type: "voice:error", voiceId: "v1", code: "unavailable", message: "model missing" });
     expect(store().state).toBe("error");
     expect(store().error).toBe("Voice dictation is unavailable: model missing");
@@ -198,7 +198,7 @@ describe("voice store", () => {
 
   it("marks a truncated final with the 2-minute notice", async () => {
     setup();
-    await store().start({ mode: "tap", onFinal });
+    await store().start({ owner: "chat", mode: "tap", onFinal });
     store().applyServerMessage({ type: "voice:final", voiceId: "v1", text: "long talk", truncated: true });
     expect(onFinal).toHaveBeenCalledWith("long talk", { truncated: true, autoSubmit: false });
     expect(store().notice).toMatch(/2-minute limit/);
@@ -207,7 +207,7 @@ describe("voice store", () => {
   it("stops by itself after 15 s of silence", async () => {
     vi.useFakeTimers();
     const t = setup();
-    await store().start({ mode: "tap", onFinal });
+    await store().start({ owner: "chat", mode: "tap", onFinal });
     t.captures[0]!.callbacks.onLevel(0.3);
     await vi.advanceTimersByTimeAsync(10_000);
     t.captures[0]!.callbacks.onLevel(0.3); // speech resets the silence clock
@@ -223,7 +223,7 @@ describe("voice store", () => {
   it("stops at the 2-minute cap even while speaking", async () => {
     vi.useFakeTimers();
     const t = setup();
-    await store().start({ mode: "tap", onFinal });
+    await store().start({ owner: "chat", mode: "tap", onFinal });
     for (let s = 0; s < VOICE_MAX_SECONDS; s += 5) {
       t.captures[0]!.callbacks.onLevel(0.3);
       await vi.advanceTimersByTimeAsync(5_000);
@@ -235,7 +235,7 @@ describe("voice store", () => {
 
   it("a lost connection ends the recording with an error", async () => {
     const t = setup();
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().connectionLost();
     expect(store().state).toBe("error");
     expect(store().error).toMatch(/connection/);
@@ -263,7 +263,7 @@ describe("voice store: graceful stop and microphone loss", () => {
 
   it("drains the capture before voice:stop: the last frames go out first", async () => {
     const t = setup();
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     const c = t.captures[0]!;
     let finishDrain: (() => void) | null = null;
     const drain = vi.fn(
@@ -287,7 +287,7 @@ describe("voice store: graceful stop and microphone loss", () => {
 
   it("a cancel while draining sends no voice:stop", async () => {
     const t = setup();
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     let finishDrain: (() => void) | null = null;
     Object.assign(t.captures[0]!, {
       drain: () =>
@@ -304,7 +304,7 @@ describe("voice store: graceful stop and microphone loss", () => {
 
   it("losing the microphone stops the recording with a notice", async () => {
     const t = setup();
-    await store().start({ mode: "tap", onFinal });
+    await store().start({ owner: "chat", mode: "tap", onFinal });
     t.captures[0]!.callbacks.onEnded?.("The microphone was disconnected.");
     expect(store().state).toBe("transcribing");
     expect(store().notice).toMatch(/microphone was disconnected/);
@@ -314,7 +314,7 @@ describe("voice store: graceful stop and microphone loss", () => {
   it("a fallback final (with a notice) shows it and is never auto-submitted", async () => {
     setup();
     useVoiceStore.setState({ status: { ...READY_STATUS, autoSubmit: true } });
-    await store().start({ mode: "hold", onFinal });
+    await store().start({ owner: "chat", mode: "hold", onFinal });
     store().stop();
     store().applyServerMessage({ type: "voice:final", voiceId: "v1", text: "partial text", notice: "The final transcription failed" });
     expect(onFinal).toHaveBeenCalledWith("partial text", { truncated: false, autoSubmit: false });
