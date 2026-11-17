@@ -26,10 +26,6 @@ export interface TerminalTabMeta {
 export interface UiStore extends UiState {
   tabMeta: Record<string, TerminalTabMeta>;
   drawerOpen: boolean;
-  /** Right sidebar (inspector) expanded (it collapses off-canvas via its edge rail). */
-  inspectorOpen: boolean;
-  /** Inspector width in px, resized by dragging its edge rail; persisted in localStorage. */
-  inspectorWidth: number;
   /** Node the edit canvas should pan to when it is outside the viewport (palette click-to-append). */
   revealNodeId: string | null;
   /** Bumped to ask the canvas to fit the graph in view (e.g. after Arrange); 0 = never asked. */
@@ -47,8 +43,6 @@ export interface UiStore extends UiState {
   setDrawerHeight(px: number): void;
   openApproval(nodeRunId: string | null): void;
   openDiff(target: DiffTarget | null): void;
-  setInspectorOpen(open: boolean): void;
-  setInspectorWidth(px: number): void;
   rememberLoopSpec(edgeId: string, spec: LoopSpec): void;
 }
 
@@ -56,35 +50,11 @@ export type ViewUiStoreApi = StoreApi<UiStore>;
 
 export const MIN_DRAWER_HEIGHT = 120;
 
-export const INSPECTOR_WIDTH = { min: 256, max: 640, default: 320 } as const;
-const WIDTH_KEYS = { inspector: "promptgraph.inspectorWidth" } as const;
-
-export function clampWidth(px: number, bounds: { min: number; max: number }): number {
-  return Math.round(Math.max(bounds.min, Math.min(px, bounds.max)));
-}
-
-function loadWidth(key: string, bounds: { min: number; max: number; default: number }): number {
-  try {
-    const stored = Number(localStorage.getItem(key));
-    return stored ? clampWidth(stored, bounds) : bounds.default;
-  } catch {
-    return bounds.default;
-  }
-}
-
-function saveWidth(key: string, px: number): void {
-  try {
-    localStorage.setItem(key, String(px));
-  } catch {
-    // Storage unavailable (private mode, quota): the width just won't survive a reload.
-  }
-}
-
 export function clampDrawerHeight(px: number, viewport: number): number {
   return Math.round(Math.max(MIN_DRAWER_HEIGHT, Math.min(px, Math.max(MIN_DRAWER_HEIGHT, viewport - 160))));
 }
 
-/** One per view (DESIGN §13.4). The inspector width is a global preference, read from localStorage at creation. */
+/** One per view (DESIGN §13.4). */
 export function createViewUiStore(): ViewUiStoreApi {
   return createStore<UiStore>()((set, get) => ({
     terminalTabs: [],
@@ -94,8 +64,6 @@ export function createViewUiStore(): ViewUiStoreApi {
     diffTarget: null,
     tabMeta: {},
     drawerOpen: false,
-    inspectorOpen: true,
-    inspectorWidth: loadWidth(WIDTH_KEYS.inspector, INSPECTOR_WIDTH),
     revealNodeId: null,
     fitRequest: 0,
     lastLoopSpec: {},
@@ -153,16 +121,6 @@ export function createViewUiStore(): ViewUiStoreApi {
       set({ diffTarget: target });
     },
 
-
-    setInspectorOpen(open) {
-      set({ inspectorOpen: open });
-    },
-
-    setInspectorWidth(px) {
-      const inspectorWidth = clampWidth(px, INSPECTOR_WIDTH);
-      set({ inspectorWidth });
-      saveWidth(WIDTH_KEYS.inspector, inspectorWidth);
-    },
 
 
     rememberLoopSpec(edgeId, spec) {

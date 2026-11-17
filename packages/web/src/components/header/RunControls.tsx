@@ -186,8 +186,9 @@ export function RunButton() {
 }
 
 /**
- * The validation badge right of the canvas toolbar, only while the editor has problems: it opens a popover above it
- * listing them (an issue with a node or edge selects it and closes the popover). Not shown while a run is on the canvas.
+ * The validation badge centred above the canvas toolbar, only while the editor has problems: it opens a popover
+ * above it, centred on it, listing them (an issue with a node or edge selects it and closes the popover). Not shown
+ * while a run is on the canvas.
  */
 export function ProblemsButton() {
   const validation = useEditor((s) => s.validation);
@@ -212,7 +213,7 @@ export function ProblemsButton() {
           {warnings > 0 && `${warnings} warning${warnings > 1 ? "s" : ""}`}
         </Button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" sideOffset={10} aria-label="Problems" className="max-h-96 w-80 overflow-y-auto p-1">
+      <PopoverContent side="top" align="center" sideOffset={8} aria-label="Problems" className="max-h-96 w-80 overflow-y-auto p-1">
         <ValidationList validation={validation} onSelect={() => setOpen(false)} />
       </PopoverContent>
     </Popover>

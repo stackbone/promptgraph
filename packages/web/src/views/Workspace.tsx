@@ -1,5 +1,4 @@
 import { webRoutes } from "@promptgraph/shared";
-import { PanelRightCloseIcon, PanelRightOpenIcon } from "lucide-react";
 import { Suspense, lazy, useState, type CSSProperties, type ReactNode } from "react";
 import { Canvas } from "../components/canvas/Canvas";
 import { Banners } from "../components/common/Banners";
@@ -8,13 +7,10 @@ import { Icons } from "../components/common/icons";
 import { Button } from "../components/common/ui";
 import { LinearIssueLinks } from "../components/common/LinearIssueLink";
 import { SaveIndicator } from "../components/header/RunControls";
-import { Inspector } from "../components/inspector/Inspector";
+import { InspectorDock } from "../components/inspector/InspectorDock";
 import { RunReport, useAutoOpenReport } from "../components/report/RunReport";
 import { TerminalDrawer } from "../components/terminal/TerminalDrawer";
 import { CanvasToolbar } from "../components/toolbar/CanvasToolbar";
-import { Button as IconButton } from "../components/ui/button";
-import { Sidebar, SidebarProvider, SidebarRail } from "../components/ui/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import type { RepoRoute } from "../lib/router/routes";
 import { createGraph } from "../store/view/actions";
 import { Link } from "../lib/router/Link";
@@ -25,43 +21,30 @@ const ApprovalDialog = lazy(() => import("../components/approval/ApprovalDialog"
 const DiffDialog = lazy(() => import("../components/approval/DiffDialog").then((m) => ({ default: m.DiffDialog })));
 
 /**
- * Graph editor and run views (§13): banners / canvas | inspector / terminal drawer. There is no top bar and no left
- * sidebar: graphs are picked in the overview (§13.3), the canvas toolbar at the bottom of the canvas holds the node
+ * Graph editor and run views (§13): banners / canvas / terminal drawer, with the inspector docked right of the tab's
+ * panel (InspectorDock). There is no top bar and no left sidebar: graphs are picked in the overview (§13.3), the canvas toolbar at the bottom of the canvas holds the node
  * palette, the run menu and the run controls (CanvasToolbar), and the linked issues float over the canvas
  * (CanvasOverlay). The report route replaces the canvas row (which stays mounted) with the run report.
  */
 export function Workspace({ route }: { route: RepoRoute }) {
-  const ui = useView().ui;
-  const inspectorOpen = useViewUi((s) => s.inspectorOpen);
-  const inspectorWidth = useViewUi((s) => s.inspectorWidth);
   const reportRunId = route.kind === "report" ? route.runId : null;
   useAutoOpenReport(route);
 
-  // The shadcn sidebar provider wraps the canvas and the right sidebar (inspector), which collapses from its edge
-  // rail (that also resizes it when dragged) or from the toggle at the canvas's top right.
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col bg-background text-foreground">
       <Banners />
       {reportRunId && <RunReport runId={reportRunId} />}
-      {/* `relative` + `overflow-hidden`: the inspector is positioned against this row (not the viewport), so it always
-          sits below any banners, and slides out of view when collapsed. */}
       <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
-        <SidebarProvider
-          open={inspectorOpen}
-          onOpenChange={(open) => ui.getState().setInspectorOpen(open)}
-          className="relative min-h-0 min-w-0 flex-1"
-          style={{ "--sidebar-width": `${inspectorWidth}px` } as CSSProperties}
-        >
-          <main className="relative flex min-w-0 flex-1 flex-col">
-            <CanvasOverlay />
-            <div className="relative min-h-0 flex-1">
-              <CanvasArea />
-              <CanvasToolbar />
-            </div>
-            <TerminalDrawer />
-          </main>
-          <RightSidebar />
-        </SidebarProvider>
+        <main className="relative flex min-w-0 flex-1 flex-col">
+          <CanvasOverlay />
+          <div className="relative min-h-0 flex-1">
+            <CanvasArea />
+            <CanvasToolbar />
+          </div>
+          <TerminalDrawer />
+        </main>
+        {/* Docked right of the tab's panel (in place outside a tab); hidden with the canvas row on the report route. */}
+        <InspectorDock hidden={reportRunId !== null} />
       </div>
       <ApprovalGate />
       <DiffGate />
@@ -90,30 +73,8 @@ function DiffGate() {
 }
 
 /**
- * The inspector's collapse / expand button, always at the top right of the canvas (just left of the inspector's top),
- * so it never moves or disappears; only its icon and label follow the inspector's state.
- */
-function InspectorToggle({ className }: { className?: string }) {
-  const { ui } = useView();
-  const open = useViewUi((s) => s.inspectorOpen);
-  const label = open ? "Collapse inspector" : "Expand inspector";
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <IconButton variant="ghost" size="icon-sm" aria-label={label} aria-expanded={open} className={className} onClick={() => ui.getState().setInspectorOpen(!open)}>
-          {open ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
-        </IconButton>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-const FLOATING = "bg-card shadow-soft ring-1 ring-border";
-
-/**
  * Controls floating over the top corners of the canvas. Top left: the graph's linked Linear issues (§24.3). Top
- * right: the autosave indicator and the inspector's collapse / expand button (always shown). Everything else sits in
+ * right: the autosave indicator. Everything else sits in
  * the canvas toolbar at the bottom (CanvasToolbar). The rows themselves let pointer events through, so only their
  * contents cover the canvas.
  */
@@ -128,24 +89,8 @@ export function CanvasOverlay() {
       ) : null}
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-2 *:pointer-events-auto">
         <SaveIndicator />
-        <InspectorToggle className={FLOATING} />
       </div>
     </>
-  );
-}
-
-function RightSidebar() {
-  const { ui } = useView();
-  return (
-    // shadcn's desktop sidebar container is `fixed inset-y-0 h-svh`; it is re-anchored to its provider's (relative)
-    // wrapper with `absolute h-full` because the banners above it have no fixed height. nokey: Backspace/Delete on the
-    // inspector's buttons, checkboxes and tabs must not delete canvas items.
-    <Sidebar side="right" collapsible="offcanvas" className="nokey absolute h-full">
-      <div className="min-h-0 flex-1">
-        <Inspector />
-      </div>
-      <SidebarRail aria-label="Collapse or resize inspector" title="Click to collapse, drag to resize" onResize={(px) => ui.getState().setInspectorWidth(px)} />
-    </Sidebar>
   );
 }
 

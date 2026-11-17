@@ -29,8 +29,8 @@ function writeOpen(open: boolean): void {
 
 /**
  * The Git graph of a repository tab (DESIGN §13.7): an icon toggle in the tab's bottom bar, after the chats, Ask
- * Claude and the chat history and before the approvals and settings, Ctrl+Shift+G, and, when open, a panel docked to the right of the tab's panel, left of a
- * docked chat. Repository views only: Home has no bottom bar and renders no RepoView.
+ * Claude and the chat history and before the approvals and settings, Ctrl+Shift+G, and, when open, a panel docked to the right of the tab's panel, between the
+ * inspector and a docked chat. Repository views only: Home has no bottom bar and renders no RepoView.
  */
 export function GitGraphDock() {
   const tab = useTabContext();
@@ -72,9 +72,9 @@ export function GitGraphDock() {
       </TooltipContent>
     </Tooltip>
   );
-  // Before a docked chat in the side slot (both may be open side by side).
+  // In the side slot after the inspector (order-first) and before a docked chat (both may be open side by side).
   const panel = open && (
-    <div className="order-first flex h-full min-h-0">
+    <div className="-order-1 flex h-full min-h-0">
       <GitGraphPanel active={active} onClose={toggle} />
     </div>
   );

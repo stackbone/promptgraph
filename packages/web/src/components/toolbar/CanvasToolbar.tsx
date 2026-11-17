@@ -5,10 +5,11 @@ import { NodesMenu } from "../palette/Palette";
 
 /**
  * The canvas toolbar (§13), floating at the bottom centre of the canvas while a graph is open, like a design tool's:
- * the Nodes menu and the run menu (the editor or one of the graph's runs, with the shown run's cost and Report);
+ * the Nodes menu and the run menu (the
+ * editor or one of the graph's runs, with the shown run's cost and Report);
  * then Undo, Redo and Arrange; then Run / Cancel (and Resume). Every button is an icon with a tooltip except the run
- * menu and the run action. Its menus open upwards. While the editor has problems, their badge sits just right of the
- * toolbar, outside it, so the toolbar keeps its size and position. The row itself lets pointer events through, so
+ * menu and the run action. Its menus open upwards. While the editor has problems, their badge sits centred just above
+ * the toolbar, outside it, so the toolbar keeps its size and position. The row itself lets pointer events through, so
  * only the toolbar and the badge cover the canvas.
  */
 export function CanvasToolbar() {
@@ -28,7 +29,7 @@ export function CanvasToolbar() {
         <ToolbarSeparator />
         <RunButton />
       </div>
-      <div className="absolute top-1/2 left-full ml-2 -translate-y-1/2">
+      <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2">
         <ProblemsButton />
       </div>
       </div>

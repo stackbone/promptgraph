@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { linearGraph } from "../test-fixtures";
 import { createTestView, TEST_REPO_ID, type TestView } from "../store/view/test-view";
-import { INSPECTOR_WIDTH } from "../store/view/ui-store";
 import { Workspace } from "./Workspace";
 
 const graph = linearGraph();
@@ -36,7 +35,7 @@ describe("workspace layout", () => {
     expect(within(toolbar).getByRole("button", { name: "Arrange" }).textContent).toBe("");
   });
 
-  it("shows the problems as a badge right of the toolbar and lists them in a popover", async () => {
+  it("shows the problems as a badge above the toolbar and lists them in a popover", async () => {
     const user = userEvent.setup();
     renderWorkspace();
     await screen.findByText("Implement");
@@ -50,6 +49,7 @@ describe("workspace layout", () => {
     await user.click(screen.getByRole("button", { name: "1 error" }));
     const popover = await screen.findByRole("dialog", { name: "Problems" });
     expect(popover.getAttribute("data-side")).toBe("top");
+    expect(popover.getAttribute("data-align")).toBe("center");
     await user.click(within(popover).getByRole("button", { name: "Broken" }));
     expect(view.editor.getState().selectedNodeIds).toEqual([nodeId]);
     expect(screen.queryByRole("dialog", { name: "Problems" })).toBeNull();
@@ -97,54 +97,13 @@ describe("workspace layout", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Nodes" })).toBeNull());
   });
 
-  it("collapses the inspector from its edge rail and brings it back from the canvas", async () => {
-    const user = userEvent.setup();
-    const { container } = renderWorkspace();
+  it("docks the inspector beside the canvas, always shown, with a resize handle and no collapse", async () => {
+    renderWorkspace();
     await screen.findByText("Implement");
-
-    const inspector = container.querySelector('[data-slot="sidebar"][data-side="right"]');
-    expect(inspector?.getAttribute("data-state")).toBe("expanded");
-    expect(screen.queryByRole("button", { name: "Expand inspector" })).toBeNull();
-
-    // The toggle is always shown: it collapses the open inspector too.
-    await user.click(screen.getByRole("button", { name: "Collapse inspector" }));
-    expect(inspector?.getAttribute("data-state")).toBe("collapsed");
-    await user.click(screen.getByRole("button", { name: "Expand inspector" }));
-    expect(inspector?.getAttribute("data-state")).toBe("expanded");
-
-    await user.click(screen.getByRole("button", { name: "Collapse or resize inspector" }));
-    expect(inspector?.getAttribute("data-state")).toBe("collapsed");
-
-    await user.click(screen.getByRole("button", { name: "Expand inspector" }));
-    expect(inspector?.getAttribute("data-state")).toBe("expanded");
-  });
-
-  it("resizes the inspector by dragging its rail without collapsing it", async () => {
-    const { container } = renderWorkspace();
-    await screen.findByText("Implement");
-
-    const rail = screen.getByRole("button", { name: "Collapse or resize inspector" });
-    const panel = rail.closest<HTMLElement>('[data-slot="sidebar-container"]')!;
-    panel.getBoundingClientRect = () => ({ width: INSPECTOR_WIDTH.default }) as DOMRect;
-    // jsdom has no pointer capture.
-    rail.setPointerCapture = () => {};
-    rail.hasPointerCapture = () => false;
-
-    // The inspector sits on the right: dragging its rail to the left widens it.
-    fireEvent.pointerDown(rail, { button: 0, clientX: 1000, pointerId: 1 });
-    fireEvent.pointerMove(rail, { clientX: 940, pointerId: 1 });
-    expect(document.documentElement.hasAttribute("data-sidebar-resizing")).toBe(true);
-    fireEvent.pointerMove(rail, { clientX: -2000, pointerId: 1 });
-    fireEvent.pointerUp(rail, { clientX: -2000, pointerId: 1 });
-    fireEvent.click(rail);
-
-    expect(view.ui.getState().inspectorWidth).toBe(INSPECTOR_WIDTH.max);
-    // Widths are global preferences: a new view starts with the stored width.
-    expect(localStorage.getItem("promptgraph.inspectorWidth")).toBe(String(INSPECTOR_WIDTH.max));
-    expect(createTestView().ui.getState().inspectorWidth).toBe(INSPECTOR_WIDTH.max);
-    expect(document.documentElement.hasAttribute("data-sidebar-resizing")).toBe(false);
-    // The click that ends a drag does not toggle the inspector.
-    expect(container.querySelector('[data-slot="sidebar"][data-side="right"]')?.getAttribute("data-state")).toBe("expanded");
+    const inspector = screen.getByRole("region", { name: "Inspector" });
+    expect(within(inspector).getByText("Graph settings")).toBeTruthy();
+    expect(within(inspector).getByRole("separator", { name: "Resize inspector" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /(Collapse|Expand) inspector/ })).toBeNull();
   });
 
   it("disables the Nodes button while a run is shown: nothing can be added to a run", () => {

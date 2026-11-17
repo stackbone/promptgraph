@@ -19,8 +19,13 @@ export interface Tab {
   path: string;
   /** Last title derived for this path (DESIGN §13.4 Titles); dropped when the tab navigates elsewhere. */
   title?: string;
-  /** The tab's chat windows (DESIGN §21.11); dropped when the tab leaves their repository. */
+  /** The tab's chat windows in the repository it shows (DESIGN §21.11). */
   chats?: TabChats;
+  /**
+   * The chats the tab had in other repositories, most recently left first: set aside when the tab leaves a repository
+   * (for Home or another one) and restored, open window included, when it comes back.
+   */
+  parkedChats?: TabChats[];
   /** The graph the tab shows (`graphKey`): from a graph route, or reported by the view of a run route. */
   graph?: string;
 }
@@ -34,6 +39,8 @@ export interface TabChats {
 
 /** At most this many chats in a tab's bottom bar; opening one more drops the oldest. */
 export const MAX_TAB_CHATS = 8;
+/** At most this many repositories' chats are set aside per tab; leaving one more drops the least recently left. */
+export const MAX_PARKED_CHATS = 20;
 
 /** A closed tab, for "reopen closed tab". */
 export interface ClosedTab {
@@ -126,6 +133,7 @@ const TabSchema = z.object({
   path: z.string(),
   title: z.string().max(MAX_TAB_TITLE).optional().catch(undefined),
   chats: TabChatsSchema.optional().catch(undefined),
+  parkedChats: z.array(TabChatsSchema).max(MAX_PARKED_CHATS).optional().catch(undefined),
   graph: z.string().max(500).optional().catch(undefined),
 });
 
@@ -192,8 +200,7 @@ export function parsePersistedTabs(raw: string | null): Pick<TabsState, "tabs" |
     if (path.length > MAX_TAB_PATH) continue;
     seen.add(t.id);
     const tab: Tab = t.title === undefined ? { id: t.id, path } : { id: t.id, path, title: t.title };
-    const chats = t.chats && repoOf(path) === t.chats.repoId ? normalizeChats(t.chats) : null;
-    if (chats) tab.chats = chats;
+    Object.assign(tab, chatsAt([t.chats, ...(t.parkedChats ?? [])], path));
     const graph = graphKeyOf(path) ?? (t.graph && repoOf(path) === t.graph.split("/")[0] ? t.graph : undefined);
     if (graph) tab.graph = graph;
     tabs.push(tab);
@@ -233,12 +240,32 @@ function normalizeChats(chats: TabChats): TabChats | null {
 }
 
 /**
- * A tab moved to `path`: the title is dropped, the chats kept while it stays in their repository, the graph taken
- * from a graph route (else kept while it stays in its repository, until the view reports it).
+ * The chats of a tab at `path`, from every chat list it holds (most recent first): those of the path's repository
+ * become `chats`, the others are set aside (one list per repository, at most MAX_PARKED_CHATS).
+ */
+function chatsAt(lists: (TabChats | undefined)[], path: string): Pick<Tab, "chats" | "parkedChats"> {
+  const repoId = repoOf(path);
+  const seen = new Set<string>();
+  const out: Pick<Tab, "chats" | "parkedChats"> = {};
+  const parked: TabChats[] = [];
+  for (const list of lists) {
+    const chats = list ? normalizeChats(list) : null;
+    if (!chats || seen.has(chats.repoId)) continue;
+    seen.add(chats.repoId);
+    if (chats.repoId === repoId) out.chats = chats;
+    else parked.push(chats);
+  }
+  if (parked.length > 0) out.parkedChats = parked.slice(0, MAX_PARKED_CHATS);
+  return out;
+}
+
+/**
+ * A tab moved to `path`: the title is dropped, the chats of the repository it leaves set aside and those of the one it
+ * enters restored, the graph taken from a graph route (else kept while it stays in its repository, until the view
+ * reports it).
  */
 function retarget(tab: Tab, path: string): Tab {
-  const next: Tab = { id: tab.id, path };
-  if (tab.chats && repoOf(path) === tab.chats.repoId) next.chats = tab.chats;
+  const next: Tab = { id: tab.id, path, ...chatsAt([tab.chats, ...(tab.parkedChats ?? [])], path) };
   if (tab.id !== PAGE_ID) {
     const graph = graphKeyOf(path) ?? (tab.graph && repoOf(path) === tab.graph.split("/")[0] ? tab.graph : undefined);
     if (graph) next.graph = graph;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_CLOSED_TABS,
+  MAX_PARKED_CHATS,
   MAX_TAB_CHATS,
   MAX_TABS,
   PAGE_ID,
@@ -439,7 +440,7 @@ describe("tabs store (DESIGN §13.4)", () => {
 describe("tab chats (DESIGN §21.11)", () => {
   const REPO = "repo-0123abcd";
 
-  it("are persisted with the tab, kept while it stays in their repository and dropped when it leaves", () => {
+  it("are persisted with the tab, kept while it stays in their repository and set aside when it leaves", () => {
     const w = windowStores();
     const store = createTabsStore({ ...w, initialPath: `${R}/graphs/g1` });
     const id = store.getState().activeId;
@@ -454,6 +455,37 @@ describe("tab chats (DESIGN §21.11)", () => {
     expect(activeTab(store.getState()).chats?.ids).toEqual(["c1", "c2"]);
     store.getState().navigate(id, `${R2}/graphs/g2`);
     expect(activeTab(store.getState()).chats).toBeUndefined();
+    expect(activeTab(store.getState()).parkedChats).toEqual([{ repoId: REPO, ids: ["c1", "c2"], open: "c2" }]);
+    store.getState().navigate(id, `${R}/graphs/g1`);
+    expect(activeTab(store.getState()).chats).toEqual({ repoId: REPO, ids: ["c1", "c2"], open: "c2" });
+    expect(activeTab(store.getState()).parkedChats).toBeUndefined();
+  });
+
+  it("of the page come back, open window included, after Home and another repository", () => {
+    const store = createTabsStore({ ...windowStores(), initialPath: R });
+    const s = () => store.getState();
+    s().setChats(PAGE_ID, { repoId: REPO, ids: ["c1"], open: "c1" });
+    s().open("/", { activate: true });
+    expect(activeTab(s()).chats).toBeUndefined();
+    s().open(R2, { activate: true });
+    s().setChats(PAGE_ID, { repoId: "repo-9876fedc", ids: ["d1"], open: null });
+    s().open(R, { activate: true });
+    expect(activeTab(s()).chats).toEqual({ repoId: REPO, ids: ["c1"], open: "c1" });
+    expect(activeTab(s()).parkedChats).toEqual([{ repoId: "repo-9876fedc", ids: ["d1"], open: null }]);
+    s().open(R2, { activate: true });
+    expect(activeTab(s()).chats).toEqual({ repoId: "repo-9876fedc", ids: ["d1"], open: null });
+  });
+
+  it("set aside are capped at MAX_PARKED_CHATS repositories, the least recently left dropped", () => {
+    const store = createTabsStore({ ...windowStores(), initialPath: R });
+    const s = () => store.getState();
+    const repos = Array.from({ length: MAX_PARKED_CHATS + 2 }, (_, i) => `repo-${i}`);
+    for (const repoId of repos) {
+      s().open(`/r/${repoId}`, { activate: true });
+      s().setChats(PAGE_ID, { repoId, ids: ["c"], open: null });
+    }
+    s().open("/", { activate: true });
+    expect(activeTab(s()).parkedChats?.map((c) => c.repoId)).toEqual(repos.slice(2).reverse());
   });
 
   it("keep the newest MAX_TAB_CHATS, an open chat that is in the bar, and nothing for an empty bar", () => {
@@ -467,10 +499,11 @@ describe("tab chats (DESIGN §21.11)", () => {
     expect(activeTab(store.getState()).chats).toBeUndefined();
   });
 
-  it("drops stored chats of another repository than the tab's path, and invalid ones", () => {
+  it("sets aside stored chats of another repository than the tab's path and drops invalid ones", () => {
     const tabs = (chats: unknown) => JSON.stringify({ version: 1, tabs: [{ id: "a", path: `${R}/graphs/g1`, chats }], activeId: "a", mru: ["a"] });
     const tabA = (raw: string) => parsePersistedTabs(raw)?.tabs.find((t) => t.id === "a");
     expect(tabA(tabs({ repoId: "repo-9876fedc", ids: ["c1"], open: null }))?.chats).toBeUndefined();
+    expect(tabA(tabs({ repoId: "repo-9876fedc", ids: ["c1"], open: null }))?.parkedChats).toEqual([{ repoId: "repo-9876fedc", ids: ["c1"], open: null }]);
     expect(tabA(tabs({ repoId: REPO, ids: "nope" }))).toEqual({ id: "a", path: `${R}/graphs/g1`, graph: G1 });
     expect(tabA(tabs({ repoId: REPO, ids: ["c1"], open: "c1" }))?.chats).toEqual({ repoId: REPO, ids: ["c1"], open: "c1" });
   });
