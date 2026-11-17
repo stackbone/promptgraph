@@ -15,6 +15,13 @@ const KEEP_OPTIONS: readonly { value: KeepWorktrees; label: string }[] = [
 
 const EMPTY: string[] = [];
 
+/** Value of the read-only permission mode shown while the app setting is on; never a graph value. */
+const BYPASS = "bypassPermissions";
+
+function permissionLabel(mode: GraphSettings["defaults"]["permissionMode"]): string {
+  return PERMISSION_OPTIONS.find((o) => o.value === mode)?.label ?? mode;
+}
+
 /** Graph settings (§6): base branch, branch prefix, parallelism, workspace setup, Claude defaults, cleanup. */
 export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: string; settings: GraphSettings; disabled: boolean }) {
   const view = useView();
@@ -100,9 +107,20 @@ export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: st
           <InheritSelect value={settings.defaults.effort} options={EFFORT_OPTIONS} inherited={undefined} disabled={disabled} onChange={(effort) => updateDefaults({ effort })} />
         </Field>
       </div>
-      <Field label="Permission mode" hint={bypass ? "Bypass permissions is on in Settings: it replaces this default on this machine." : undefined}>
-        <Select value={settings.defaults.permissionMode} options={PERMISSION_OPTIONS} disabled={disabled} onChange={(permissionMode) => updateDefaults({ permissionMode })} />
-      </Field>
+      {bypass ? (
+        // The app setting replaces the graph's default on this machine (§7.6): show the mode consoles really start in.
+        // It is never written to the graph file, which keeps its own default for everyone else.
+        <Field
+          label="Permission mode"
+          hint={`From Settings → Bypass permissions, on this machine only. The graph keeps "${permissionLabel(settings.defaults.permissionMode)}" for everyone else; turn the setting off to change it.`}
+        >
+          <Select<string> value={BYPASS} options={[{ value: BYPASS, label: "Bypass permissions (from Settings)" }]} disabled onChange={() => {}} />
+        </Field>
+      ) : (
+        <Field label="Permission mode">
+          <Select value={settings.defaults.permissionMode} options={PERMISSION_OPTIONS} disabled={disabled} onChange={(permissionMode) => updateDefaults({ permissionMode })} />
+        </Field>
+      )}
       <Field label="Allowed tools" hint="One per line.">
         <LinesInput key={graphId} value={settings.defaults.allowedTools} disabled={disabled} placeholder="Bash(pnpm test:*)" onChange={(allowedTools) => updateDefaults({ allowedTools })} />
       </Field>

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { graphOf, nodeRunOf, runDetailOf, testFixLoopGraph } from "../../test-fixtures";
+import { useDaemonStore } from "../../store/daemon-store";
 import { createTestView, type TestView } from "../../store/view/test-view";
 import { Inspector } from "./Inspector";
 
@@ -106,6 +107,31 @@ describe("inspector (phase 2)", () => {
     expect(useEditorStore.getState().graph!.edges.find((e) => e.id === "e1")!.when).toBe("always");
     fireEvent.click(screen.getByLabelText("Loop back-edge"));
     expect(useEditorStore.getState().graph!.edges.find((e) => e.id === "e1")!.loop).toEqual({ maxIterations: 3, onExhausted: "fail" });
+  });
+
+  it("shows Bypass permissions as the graph's permission mode while the app setting is on, without saving it", async () => {
+    const user = userEvent.setup();
+    const saved = useDaemonStore.getState().settings;
+    try {
+      useDaemonStore.setState({ settings: { notifications: true, bypassPermissions: true } });
+      useEditorStore.setState({ graph: graphOf({ id: "g1", name: "G" }), graphId: "g1", loading: false, loadError: null, activeRunId: null });
+      const { unmount } = render(<Inspector />);
+      const mode = screen.getByRole("combobox", { name: /Permission mode/ }) as HTMLSelectElement;
+      expect(mode.selectedOptions[0]!.textContent).toBe("Bypass permissions (from Settings)");
+      expect(mode.disabled).toBe(true);
+      expect(screen.getByText(/The graph keeps "Auto" for everyone else/)).toBeTruthy();
+      expect(useEditorStore.getState().graph!.settings.defaults.permissionMode).toBe("auto");
+      unmount();
+
+      useDaemonStore.setState({ settings: { notifications: true, bypassPermissions: false } });
+      render(<Inspector />);
+      const editable = screen.getByRole("combobox", { name: /Permission mode/ }) as HTMLSelectElement;
+      expect(editable.disabled).toBe(false);
+      await user.selectOptions(editable, "plan");
+      expect(useEditorStore.getState().graph!.settings.defaults.permissionMode).toBe("plan");
+    } finally {
+      useDaemonStore.setState({ settings: saved });
+    }
   });
 
   it("renames the graph from the graph settings on Enter; Escape and an empty name restore it", async () => {
