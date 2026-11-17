@@ -134,7 +134,7 @@ One daemon per user (per `PG_HOME`) manages every repository. It is the only pro
 
 - **`promptgraph [repo-dir]`** resolves `repo-dir` (default `cwd`) to the git top level and its realpath (fails if not a git repo), checks prerequisites (only warns, `gh` is needed for PR nodes), runs `ensureDaemon`, registers the repository (`POST /api/repos`, idempotent), opens the browser **signed in** on `/r/<repoId>` through a one-time login URL (§14), prints `Opened <name>: http://127.0.0.1:<port>/r/<repoId>` (no secret in it) and exits. `--no-open` registers and prints only. `--port` only applies when this call starts the daemon (a warning says so otherwise).
 - **`--foreground`** runs the daemon in this process instead (refused while another daemon runs), registers the repository, opens it and prints `Open: http://127.0.0.1:<port>/r/<repoId>`; Ctrl-C (or closing the terminal) stops the daemon and with it every repository. Tests, crash tests and the screenshot/video scripts use this form.
-- **Lane worktrees are never repositories.** A path whose git top level (realpath) is at or under the worktrees root (`<PG_HOME>/worktrees`, as configured and as its realpath) is refused with 422 `lane_worktree`, and the backfill (§4.4) skips such paths: registering one would activate it (graphs dir inside the lane, a second lane manager running `git worktree prune` and snapshot-ref pruning on the shared git directory without the owning repository's lock) and let graphs run inside a lane. `promptgraph mcp` maps such a cwd to its repository (§19.2).
+- **Lane worktrees are never repositories.** A path whose git top level (realpath) is at or under a worktrees root (the current one of §9.1 or the legacy `<PG_HOME>/worktrees`, each as configured and as its realpath) is refused with 422 `lane_worktree`, and the backfill (§4.4) skips such paths: registering one would activate it (graphs dir inside the lane, a second lane manager running `git worktree prune` and snapshot-ref pruning on the shared git directory without the owning repository's lock) and let graphs run inside a lane. `promptgraph mcp` maps such a cwd to its repository (§19.2).
 - **Paths**: `POST /api/repos` takes an **absolute** path; a leading `~` or `~/` is expanded to the daemon user's home, anything else relative is refused with 422 `path_not_absolute` (the daemon's cwd is `PG_HOME`, so a relative path would mean nothing useful). The CLI and `promptgraph mcp` resolve paths before sending them; Home's add field says so.
 - **Repository id** (`repoId`, used in every URL and API path): `<slug>-<hash8>`, where `slug` is the directory name lowercased with runs of other characters than `[a-z0-9]` replaced by `-`, trimmed, at most 24 characters (`repo` if empty), and `hash8` the first 8 hex digits of the SHA-256 of the realpath. Readable (`/r/promptgraph-3f9a1c2e`), stable across restarts and re-registration, and distinct for two checkouts with the same name. Only the daemon derives it; clients get it from `POST /api/repos`. Two paths that resolve to the same realpath are the same repository, so two engines never race on one repository's git lock. The registry, the engine (`RepoRef.path`) and `runs.repo_path` all hold that realpath (§4.4 normalises older rows).
 - **Registered repositories persist** (table `repos`, §11.2) until removed. A repository whose directory has disappeared stays listed with `available: false`; it is never removed automatically.
@@ -232,7 +232,7 @@ Roots are nodes with no incoming (non-loop) edges. A graph may have several root
 
 | Type | Runner | Config | Output |
 |---|---|---|---|
-| `prompt` | Claude (PTY) | `prompt`, `context`, `model?`, `effort?`, `permissionMode?`, `allowedTools?`, `completion?` | Last assistant message |
+| `prompt` | Claude (PTY) | `prompt`, `images?` (pasted images, §25), `context`, `model?`, `effort?`, `permissionMode?`, `allowedTools?`, `completion?` | Last assistant message |
 | `command` | Claude (PTY) | `command` (e.g. `/simplify`, `/code-review high`), plus same options as `prompt` | Last assistant message |
 | `shell` | Shell (PTY) | `run`, `timeoutSec?`, `env?` | Exit code + tail of stdout/stderr (last 200 lines) |
 | `commit` | Git | `message?` (fixed) or `generateMessage: true` (default), `squashCheckpoints: true` (§9.3) | Commit SHA, message |
@@ -263,14 +263,14 @@ claude "<initial message>" \
   --name "pg:<graph>/<node-label>"  # visible in /resume and terminal title
   --settings <run-dir>/hooks.json   # hook injection, §7.2
   --permission-mode <mode> \
-  [--model <m>] [--effort <e>] [--allowedTools ...]
+  [--model <m>] [--effort <e>] [--add-dir=<images dir>] [--allowedTools ...]
 ```
 
 or, when `context = "resume"` (§7.5): `claude --resume <previous-session-id> "<message>" ...`.
 
 - `cols/rows`: start at 120×40; resized on attach from the browser (`pty.resize`).
 - Env: inherits the daemon's environment (§4.1 item 5: the same for every repository, never the environment of whoever registered the repository) minus `PG_HOME` and any inherited hook variables, plus `TERM=xterm-256color`, `PG_PORT` (the daemon's port), `PG_HOOK_HEADER_FILE`, `PG_NODE_RUN_ID`. The token is never passed to Claude: the header file (mode 0600, in the run dir) holds a per-node-run hook token, `HMAC(hook secret, nodeRunId)`, that only authorises `POST /hooks/<nodeRunId>/*`. The hook secret is random per daemon start and kept in memory only (PTYs never outlive the daemon), so rotating the token (§14) does not cut live sessions off.
-- `<initial message>` for `command` nodes is the slash command itself (`/simplify`); for `prompt` nodes it is the prompt plus the context block (§7.5).
+- `<initial message>` for `command` nodes is the slash command itself (`/simplify`); for `prompt` nodes it is the prompt plus the context block (§7.5), and the list of pasted images when there are any (§25).
 
 ### 7.2 Hook injection
 
@@ -360,14 +360,25 @@ Output of a Claude node = text of the **last assistant message**, read from `tra
   else, can never turn it on. The inspector's "Default (…)" says when the setting replaces the graph default; while it
   is on, the graph settings show "Bypass permissions (from Settings)" as the permission mode, read-only and never
   written to the graph file, and name the default the graph keeps for everyone else (turning the setting off makes the
-  graph default editable again). Claude Code asks once, in the terminal, to accept the mode. **What it costs:** Claude no longer asks
-  before running commands or before reading outside its worktree, so the `blockReadsOutsideWorkingDirectories`
-  prompt below no longer protects the token; only the `permissions.deny` rules remain. A step could then read the
+  graph default editable again). Claude Code asks once, in the terminal, to accept the mode. A console started in
+  `bypassPermissions` gets the run's `hooks-bypass.json` in place of `hooks.json`: the same hooks and deny rules, without
+  `blockReadsOutsideWorkingDirectories`. Claude Code 2.1.x enforces that block in bypass mode too: a step reading the
+  main checkout (`cd ../..`, an untracked reference file) would keep asking, which is what the setting turns off. A node
+  with its own mode (`plan`) keeps `hooks.json`. **What it costs:** Claude no longer asks before running commands or
+  before reading outside its worktree, so only the `permissions.deny` rules protect the token. A step could then read the
   token, approve its own gate and push. The setting's description says so, and turning it on is the user's explicit
-  choice (invariant 5). The chat (§21) never uses it.
+  choice (invariant 5). The chat (§21.2) follows the same setting: while it is on, chat processes start in
+  `bypassPermissions` too, and the chat panel's status line says so. In bypass mode it can read and write the
+  repository and anything else the user can reach without asking, except promptgraph's secrets: every chat process
+  gets the same `permissions.deny` rules as the node consoles (below) as an inline `--settings` JSON. Deny rules still
+  apply in `bypassPermissions` mode (checked against Claude Code 2.1.326: both `Read` and `cat` of a denied path are
+  refused). It does not get `blockReadsOutsideWorkingDirectories`, which would bring back the prompts the user turned
+  off. Until
+  2026-11 the chat always used `default`. Users who turned the setting on expected it to cover every Claude process
+  promptgraph starts, and a chat that kept asking contradicted that.
 - When a permission prompt appears, `Notification` turns the node yellow; you answer it in the terminal.
 - `allowedTools` per node to make unattended runs smoother (e.g. `Bash(pnpm test:*)`).
-- The generated `--settings` file (§7.2) also carries `permissions.deny` rules for promptgraph's own secrets: `Read` of `<PG_HOME>` itself (a recursive `grep`/`find` naming it, or `..` from a lane worktree, which lives under it), and `Read` and `Edit` of `<PG_HOME>/token`, `<PG_HOME>/linear-key` (§24), `<PG_HOME>/state.db*`, `<PG_HOME>/runs/**` (the hook header files), `<PG_HOME>/servers/**` (the discovery records of pre-M7 per-repository servers, which hold that server's live API token) and `<PG_HOME>/logs/**` (pre-M7 detached servers printed a token URL to their logs; the daemon logs no credential, but old logs may remain), as absolute rule paths (`//…`), written for `PG_HOME` as given and, when it is a symlink, for its realpath too. Deny rules alone do not contain Bash: Claude Code runs its built-in read-only commands (`cat`, `grep`, `find`, `head`, …) without a prompt in every mode, also outside the working directory, and a deny rule does not apply to a command that reads files without naming them (`grep -r x .` run from a parent directory). So the file also sets `permissions.blockReadsOutsideWorkingDirectories: true` (Claude Code ≥ 2.1.257): the file tools refuse paths outside the session's working directory (the lane worktree; Claude Code's own files such as skills and plugins stay readable) and recognised file-reading Bash commands on such paths prompt the user even in `acceptEdits` mode. A step that needs a directory outside its worktree gets it with `/add-dir` in its terminal. An agent therefore cannot read the token and approve its own gate through the API without the user approving the read (invariant: nothing leaves the machine without approval). `PG_HOME` is not passed to children. Other programs an approved command runs (a script that opens files itself) are not contained; shell nodes are trusted graph code (§14).
+- The generated `--settings` file (§7.2) also carries `permissions.deny` rules for promptgraph's own secrets: `Read` of `<PG_HOME>` itself (a recursive `grep`/`find` naming it; Claude Code applies it to everything under PG_HOME, which is why the worktrees live outside it, §9.1), and `Read` and `Edit` of `<PG_HOME>/token`, `<PG_HOME>/linear-key` (§24), `<PG_HOME>/state.db*`, `<PG_HOME>/runs/**` (the hook header files), `<PG_HOME>/servers/**` (the discovery records of pre-M7 per-repository servers, which hold that server's live API token) and `<PG_HOME>/logs/**` (pre-M7 detached servers printed a token URL to their logs; the daemon logs no credential, but old logs may remain), as absolute rule paths (`//…`), written for `PG_HOME` as given and, when it is a symlink, for its realpath too. Deny rules alone do not contain Bash: Claude Code runs its built-in read-only commands (`cat`, `grep`, `find`, `head`, …) without a prompt in every mode, also outside the working directory, and a deny rule does not apply to a command that reads files without naming them (`grep -r x .` run from a parent directory). So the file also sets `permissions.blockReadsOutsideWorkingDirectories: true` (Claude Code ≥ 2.1.257): the file tools refuse paths outside the session's working directory (the lane worktree; Claude Code's own files such as skills and plugins stay readable) and recognised file-reading Bash commands on such paths prompt the user even in `acceptEdits` mode. A step that needs a directory outside its worktree gets it with `/add-dir` in its terminal. An agent therefore cannot read the token and approve its own gate through the API without the user approving the read (invariant: nothing leaves the machine without approval). `PG_HOME` is not passed to children. Other programs an approved command runs (a script that opens files itself) are not contained; shell nodes are trusted graph code (§14).
 
 ---
 
@@ -468,11 +479,21 @@ A run that already ended is not edited: its graph is the plain file again. A nod
 ### 9.1 Layout
 
 ```
-~/.promptgraph/worktrees/<repo-name>/<run-id>/<lane-id>/   # git worktree
-branches: <branchPrefix>/<run-short-id>/<lane-id>           # e.g. pg/feature-x/3f9a/main
+~/.local/share/promptgraph/worktrees/<repo-name>/<run-id>/<lane-id>/   # git worktree
+branches: <branchPrefix>/<run-short-id>/<lane-id>                       # e.g. pg/feature-x/3f9a/main
 ```
 
-Worktrees live outside the repo to avoid polluting it and to avoid nested-repo confusion for tools. Two registered repositories with the same directory name share `<repo-name>/`; run ids keep their worktrees apart.
+The root is `pgWorktreesDir()`: `$PG_WORKTREES_DIR` when set; otherwise `$XDG_DATA_HOME/promptgraph/worktrees`
+(`~/.local/share/promptgraph/worktrees` by default) for the real `PG_HOME`, and `<PG_HOME>-worktrees` next to an
+explicit `PG_HOME` (tests and manual runs), so a throwaway home never writes to the user's data dir.
+
+Worktrees live outside the repo to avoid polluting it and to avoid nested-repo confusion for tools: `git status`,
+watchers, test runners and type checkers would see a full second copy of the code, and Claude Code would load the
+main checkout's `CLAUDE.md` and `.claude/` as parents of every lane. They also live outside `PG_HOME`. Until 2026-11
+they lived in `~/.promptgraph/worktrees`, but Claude Code 2.1.x applies the `Read(<PG_HOME>)` deny rule of §7.6 to
+everything under it, so a node could no longer read its own worktree. Dropping that rule would let a `grep -r` from a
+lane read the token in bypass mode. With the worktrees elsewhere, PG_HOME stays denied as a whole. Existing worktrees
+are moved at daemon start (§11.4). Two registered repositories with the same directory name share `<repo-name>/`; run ids keep their worktrees apart.
 
 ### 9.2 Lane assignment (computed at run start, on the snapshot)
 
@@ -624,9 +645,32 @@ Terminal logs: `~/.promptgraph/runs/<run-id>/<node-run-id>.log`.
 | `locks/daemon.pid` | 0600 | Pid of the daemon, for messages only; the lock itself is an abstract Unix socket held by the kernel (§4.1 item 1) |
 | `locks/<repo-key>.pid` | 0600 | Legacy per-repository locks, written by the daemon for every registered repository so pre-M7 binaries refuse to start (§4.4) |
 | `logs/daemon.log` | 0600 | Output of a detached daemon (appended; rotated to `daemon.log.1` above 5 MB at start) |
-| `state.db`, `settings.json`, `runs/`, `worktrees/`, `bin/pg-hook` | | As before; `settings.json` (notifications, voice, bypass permissions) is global to the daemon |
+| `images/<sha256>.<ext>` | 0600 | Pasted images (§25), content-addressed; directory 0700. Never deleted by promptgraph: graph files and chat transcripts may still name them |
+| `state.db`, `settings.json`, `runs/`, `bin/pg-hook` | | As before; `settings.json` (notifications, voice, bypass permissions) is global to the daemon |
+| `worktrees/` | | Legacy lane worktrees root, emptied and removed by the migration of §11.4; only runs that could not be moved remain |
 
 The daemon re-asserts the modes of the directory, `token` and `state.db` on every start.
+
+### 11.4 Worktree migration (`workspace/worktree-migration.ts`)
+
+At every start, right after opening `state.db` and before any repository context exists (no PTY or git call uses a
+worktree yet), `migrateLegacyWorktrees` moves `<PG_HOME>/worktrees/<repo-name>/<run-id>/` to the root of §9.1, one run
+directory at a time:
+
+1. The run directory, with its lane worktrees, untracked work and `.images`, is renamed. Across filesystems it is
+   copied and then removed.
+2. `git worktree repair` runs in each lane worktree, so the repository's admin entry (`.git/worktrees/<name>/gitdir`)
+   points at the new location and a later `git worktree prune` keeps it.
+3. The lanes' `worktree_path` is rewritten in the store.
+4. Each lane's Claude project dir (`<claude config>/projects/<cwd as dir name>`) is **copied** to the dir of the new
+   cwd. It is never moved, because it is Claude Code's data. The node runs' `transcript_path` is rewritten to the
+   copy, so "Reopen session" (`--resume`) finds the conversation. Claude Code shortens very long dir names: those
+   sessions are not found, and the step starts a new one.
+
+The migration is idempotent and per run. A run whose target already exists, or whose move fails, stays in the legacy
+root with its stored paths and keeps working there. Cleanup (§9.6) removes it from either root, and `isInWorktreesDir`
+covers both. Every outcome is logged (`[worktrees] …`), and empty legacy directories are removed. A failure of the
+migration as a whole is logged and never stops the daemon.
 
 ---
 
@@ -656,6 +700,8 @@ Daemon-level routes:
 | PUT/DELETE | `/api/linear/key` | `{ apiKey }`: checked with Linear, then saved (422 `linear_key_invalid`, nothing saved) / removed; both answer `LinearStatusResponse` |
 | GET | `/api/linear/issue-states?ids=` | `LinearIssueStatesResponse` (§24.3): the current title and state of linked issues by Linear id (comma-separated, 1–50; issues Linear does not know are missing), cached by the daemon for 60 s; 409 / 502 as below |
 | GET | `/api/linear/issues?q=&states=&scope=` | `LinearIssuesResponse` (§24): up to 25 issues: a list by last update (`q` empty), one issue (`q` an identifier or issue URL, never filtered) or a search; `states` = comma-separated Linear state types (default the open ones; an unknown type → 400); `scope` = `mine` (assigned to the viewer) or `all` (absent: `mine` for the list, `all` for a search); 409 `linear_not_connected`, 502 `linear_key_invalid` / `linear_unavailable` |
+| POST | `/api/images` | `UploadImageRequest {mediaType, data}` (base64; API writes are JSON only) → `UploadImageResponse {id, bytes}`: stores a pasted image (§25). 400 `invalid_image` (the bytes are not PNG, JPEG, GIF or WebP, or not the declared type), 413 `image_too_large` |
+| GET | `/api/images/:id` | `GetImageResponse {id, mediaType, data}` (base64), for the UI's previews; 404 `image_not_found` |
 | GET | `/api/voice` | Voice dictation status, daemon-wide (`VoiceStatus`, §22): whisper binary and model found, why not, setup lines, resolved mode / language / autoSubmit and where each came from. Cached for 5 s; `?refresh=1` ("Check again") re-probes, at most once per second and coalesced with a probe in flight; honoured only without `Sec-Fetch-Site` or with `same-origin`/`none` (a probe spawns `whisper-cli --help`, and the cookie also rides subresource GETs from other localhost ports) |
 
 Repository routes, all under `/api/repos/:repoId` (404 `unknown_repo` for an unregistered id, 409 `repo_unavailable` when its directory is gone; requests for a repository being removed wait for the removal, §4.2). The middleware **loads** the repository's context for every request and **activates** it before any non-GET request (§4.2). Run, node-run and PTY ids are globally unique, but they are still addressed under their repository: the engine answers `not_found` for another repository's ids, so routing needs no lookup and a tab can never act on the wrong repository.
@@ -744,11 +790,11 @@ The client reference-counts its subscriptions (two tabs on one run share one `su
 
 Every view has a URL (§13.2) and lives in an in-app tab (§13.4). The views are the **overview** (Home and a repository's graphs, §13.3), the **graph editor**, a **run** (the canvas in run mode), a **node run** (a run with one node selected and its terminal open) and the **run report** (§13.1). The graph editor and run views are made of:
 
-- **No top bar.** Graphs are picked in the overview (§13.3); the graph is renamed in the inspector's graph settings (**Name**, saved on blur or Enter, one undo step; the file name stays) and deleted from its overview card. No left sidebar either: the node palette, the **run menu** and the run controls live in the **canvas toolbar**. Floating over the **top left of the canvas**: the graph's linked Linear issues (§24.3); over its **top right**: the autosave indicator and the inspector's collapse / expand button, always shown just left of the inspector's top, with an icon that follows its state.
-- **Canvas toolbar**: one bar floating at the bottom centre of the canvas while a graph is open, like a design tool's. In order: **Nodes** (opens the node palette above the bar: a click appends a node below the last one and closes it; dragging a node type hides it so the drop lands on the canvas, and closes it once dropped; disabled while a run is shown), the **run menu** (opens upwards), the shown run's cost and **Report** (run mode only); a separator, **Undo**, **Redo** and **Arrange**; and a separator, Resume (a paused run with nothing to retry or skip) and Run / Cancel. Every button is an icon with a tooltip except the run menu and the run action. Only while the editor has problems (and no run is shown), a problems badge ("2 errors · 1 warning") sits just right of the toolbar, outside it, so the toolbar keeps its size and position; it opens a popover above it listing the problems, and clicking one with a node or edge selects it and closes the popover.
+- **No top bar.** Graphs are picked in the overview (§13.3); the graph is renamed in the inspector's graph settings (**Name**, saved on blur or Enter, one undo step; the file name stays) and deleted from its overview card. No left sidebar either: the node palette, the **run menu** and the run controls live in the **canvas toolbar**. Floating over the **top left of the canvas**: the graph's linked Linear issues (§24.3); over its **top right**: the autosave indicator.
+- **Canvas toolbar**: one bar floating at the bottom centre of the canvas while a graph is open, like a design tool's. In order: **Nodes** (opens the node palette above the bar: a click appends a node below the last one and closes it; dragging a node type hides it so the drop lands on the canvas, and closes it once dropped; disabled while a run is shown), the **run menu** (opens upwards), the shown run's cost and **Report** (run mode only); a separator, **Undo**, **Redo** and **Arrange**; and a separator, Resume (a paused run with nothing to retry or skip) and Run / Cancel. Every button is an icon with a tooltip except the run menu and the run action. Only while the editor has problems (and no run is shown), a problems badge ("2 errors · 1 warning") sits centred just above the toolbar, outside it, so the toolbar keeps its size and position; it opens a popover above it, centred, listing the problems, and clicking one with a node or edge selects it and closes the popover.
 - **Run menu**: what the canvas shows, **Editor** or one of the graph's runs (the run history lives only there; there is no runs panel). Each run row shows its status, number, start, duration, cost and what waits for the user, and links to the run; on hover or focus (always on the selected row) it shows **Report** and **Delete**. Delete asks for a confirmation and is disabled while the run is running or paused (cancel it first): it removes the run's worktrees and the branches cleanup removes (pushed branches and branches with commits stay), its rows, events and terminal logs, and its snapshot refs (`DELETE /api/repos/:repoId/runs/:id`, `run:deleted`); a view showing that run goes back to the editor. ↑/↓ move between the rows. The repository's pending approvals and the settings are in the tab strip (§13.4), as is the app logo; the repository's name is in the tab title.
 - **Canvas** (React Flow): minimap (bottom right), snap to grid, node types dragged in from the toolbar's Nodes menu. Floating over its top right corner: a "Saving…" spinner while an edit is being autosaved (nothing once saved; the error if a save fails). **Arrange** re-places every node with the automatic top-to-bottom layout (§19.3), overwriting the saved positions (autosaved as one edit, so Undo restores them), then fits the graph in view; it is disabled while the graph is already arranged, has fewer than two nodes, is read-only or a run is shown. The canvas's own controls (bottom left) are zoom in/out and fit view. In run mode nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance); the run canvas itself is not edited. While a run is active the graph editor stays editable for the steps that have not started (§8.7): nodes that started show a lock (`frozen`: only moved or renamed; `config`: config editable for the next attempt, not deleted), connections into them and their deletion are refused, graph settings, name and linked issues are disabled, and the palette works. A save the run refuses keeps the local edits unsaved behind a banner with the reason and **Discard changes** (reload from disk); validation errors keep them unsaved until fixed. The run canvas refetches the run when its `graphRev` changes, so added steps appear there too.
-- **Inspector** (right): config of the selected node; in run mode, its NodeRun details (output, session id, branch, timings, error) and controls (Done, Fail, Hold, Retry, Skip).
+- **Inspector** (right): config of the selected node; in run mode, its NodeRun details (output, session id, branch, timings, error) and controls (Done, Fail, Hold, Retry, Skip). It is a panel docked to the right of the tab's panel, in the same slot as the Git graph (§13.7) and a docked chat (§21.11), closest to the canvas; it is always shown in the editor and run views (it has no collapse) and hidden on the report route. Dragging its left edge resizes it (the width is remembered per browser).
 - **Terminal drawer** (bottom, resizable): opens on node click. Its own small tab row, one per open terminal (not to be confused with the app tabs of §13.4). Live PTY for running nodes, replayed log for finished ones with "Reopen session".
 - **Approval dialog**: diff viewer + approve/reject.
 - **Diff dialog**: what a node changed (§9.7), with a switch to its whole lane; opened from the inspector and the report.
@@ -851,7 +897,7 @@ A timeline of what has happened in a run so far, readable at any moment without 
 
 ### 13.7 Git graph
 
-A repository tab can show the repository's history as a commit graph, like VS Code's Git Graph extension. It is a panel docked to the right of the tab's panel, the same slot as a docked chat (§21.11), left of the chat when both are open; the tab's panel shrinks. It exists in every view of a repository (its overview, the graph editor, runs and reports), never on Home, which has no repository.
+A repository tab can show the repository's history as a commit graph, like VS Code's Git Graph extension. It is a panel docked to the right of the tab's panel, the same slot as the inspector (§13) and a docked chat (§21.11), between them when they are open; the tab's panel shrinks. It exists in every view of a repository (its overview, the graph editor, runs and reports), never on Home, which has no repository.
 
 - **Toggle.** An icon button (Git graph, no label) in the tab's bottom bar, after the chats, **Ask Claude** and the chat history (§21.11) and before the pending approvals and the settings menu (§13.4). Also Ctrl+Shift+G or Alt+Shift+G (not while a terminal has focus; Ctrl+Shift+G only shadows the browser's "find previous"). Whether it is open is remembered per browser (`pg.gitGraph.open`) and read by each view when it mounts; its width as for the chat (`pg.gitGraph.width`, 320 px to 60 % of the window, default 480 px).
 - **Data.** `GET /api/repos/:repoId/git/log` (§12.1), all read-only (`READ_ONLY_GIT_CONFIG`, `status --no-optional-locks`): `git log --branches --remotes --tags HEAD --topo-order --source` with decorations limited to `refs/heads/`, `refs/remotes/` (without `*/HEAD`) and `refs/tags/`. promptgraph's snapshot refs (`refs/promptgraph/*`, §10) are neither walked nor shown; the branches of runs' lanes are ordinary branches and appear like any other. HEAD is read with `rev-parse` and `symbolic-ref` (a detached HEAD has no ref; a repository without commits returns an empty history).
@@ -883,7 +929,7 @@ The trust boundary is the user's account on one machine: anything running as the
   - The bundled Node is pinned by version and SHA-256, verified on every use of the tarball, cached or not (§20.6). The installed runtime (`~/.local/share/promptgraph/runtime`, directory mode 0700) and the `~/.local/bin/promptgraph` command are owned by the user and trusted like any program in their home; the installer refuses a runtime directory that is a symlink or owned by another user, and a `~/.local/bin` owned by another user, writable by others, or writable by a group other than the user's private group (§20.7, §20.8). The app writes the command only after the user agreed, and never replaces a file it did not write without asking, even if one appears between the check and the write (§20.8).
   - The desktop-only switches (`PG_DESKTOP_AUTO_ANSWER`, `PG_DESKTOP_UPDATES`) are removed from the environment of every process the shell starts and from the daemon's children, so a step that starts the app or a nested promptgraph never inherits an automatic answer.
 - **Linear** (§24): the only outbound requests the daemon makes itself (`gh` and `git` make their own). The personal API key lives in `~/.promptgraph/linear-key` (0600) and is write-only: no route, WS message or MCP tool returns it, it is never logged, never put in a child's environment, sent only to `https://api.linear.app/graphql`, and the `--settings` file denies Claude's file tools access to it (§7.6). Reads carry the picker's search text and issue ids. The only writes are a `linear` node's comments and state changes (§24.5), each shown to and approved (possibly edited) by the user first, posted as the key's user; they may summarise the run's work, which is why they are gated. The `/api/linear` GETs read Linear and change nothing locally.
-- No `bypassPermissions` by default; nothing is pushed without an approval gate. The user may turn on the *Bypass permissions* app setting (§7.6), which weakens that guarantee for Claude steps (a step can then read the token without a prompt); graph files can never turn it on.
+- No `bypassPermissions` by default; nothing is pushed without an approval gate. The user may turn on the *Bypass permissions* app setting (§7.6), which weakens that guarantee for Claude steps and the chat (a Bash command that reads the token without naming it, such as `grep -r` from a parent directory, then runs without a prompt; the `permissions.deny` rules still block direct reads); graph files can never turn it on.
 - Shell nodes run arbitrary commands by design: graph files are trusted like any script in the repo. The UI shows a warning when opening a graph modified outside the app since the last run (hash comparison).
 - Binary WebSocket frames are accepted only as voice audio (§22): routed to the sending client's active voice session, ignored when it has none, at most 64 KiB per frame and 2 minutes of audio (3 840 000 bytes) per session. Audio is never logged, never persisted beyond a mode-0600 temp WAV (in a per-server 0700 directory) deleted after each transcription pass, and never leaves the machine. whisper-cli is spawned with an argument array (no shell), and nothing derived from the audio is ever put in its arguments.
 
@@ -1034,7 +1080,7 @@ The MCP server finds the daemon through `daemon.json` (§11.3) and the token fil
 
 ### 19.2 `promptgraph mcp`
 
-- Started by Claude Code with the project directory as `cwd`; the repository is its git top level (`PROMPTGRAPH_REPO` or a tool's `repo` argument override it). Inside a lane worktree (a Claude step of a run, which has the plugin too and reaches the daemon because `PG_HOME` is not passed to children) the git top level is under `~/.promptgraph/worktrees/`, and the repository is the one that worktree belongs to (the parent of `git rev-parse --git-common-dir`), never the worktree itself (§4.2).
+- Started by Claude Code with the project directory as `cwd`; the repository is its git top level (`PROMPTGRAPH_REPO` or a tool's `repo` argument override it). Inside a lane worktree (a Claude step of a run, which has the plugin too and reaches the daemon because `PG_HOME` is not passed to children) the git top level is under the worktrees root (§9.1), and the repository is the one that worktree belongs to (the parent of `git rev-parse --git-common-dir`), never the worktree itself (§4.2).
 - stdout carries only the protocol. When the client disconnects (stdin ends), nothing keeps the process alive but calls in flight: they answer, then it exits.
 - `start_server` runs `ensureDaemon` (§4.1: reuses a running daemon, otherwise spawns `promptgraph daemon` detached, with the sanitised environment of §4.1 item 5 rather than the Claude session's, and output in `~/.promptgraph/logs/daemon.log`) and registers the repository. The daemon outlives the Claude session on purpose, because runs take longer than one conversation; it stops with `promptgraph stop`.
 - `server_status` reports whether the daemon runs (pid, version, port), whether this repository is registered, its `repoId` and its `RepoSummary` counters. Every other tool fails with "promptgraph is not running; call start_server" when there is no daemon, and registers the repository on first use otherwise.
@@ -1256,7 +1302,7 @@ This does not break invariant 1 (never parse the TUI): there is no TUI. `--outpu
 claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages \
   --session-id <uuid>                 # new session (we generate it); --resume <id> after the process exited
   --name "pg:chat/<title>" \
-  --permission-mode default --permission-prompt-tool stdio \
+  --permission-mode default|bypassPermissions --permission-prompt-tool stdio \
   --plugin-dir <bundled plugins/promptgraph>   # or --mcp-config '<inline JSON>' (below)
   --append-system-prompt <CHAT_SYSTEM_PROMPT> \
   --allowedTools <non-destructive promptgraph MCP tools> \
@@ -1267,8 +1313,8 @@ claude -p --input-format stream-json --output-format stream-json --verbose --inc
 - With the plugin, MCP tools are named `mcp__plugin_promptgraph_promptgraph__<tool>` (server `plugin:promptgraph:promptgraph`). When the running server does not bundle the plugin, `--mcp-config` registers `{"mcpServers":{"promptgraph":{"command":<node>,"args":[<cli entry>,"mcp"],"env":{…}}}}` (tools `mcp__promptgraph__<tool>`); there are no skills then, and `chat:status` carries a warning.
 - `AskUserQuestion` is allowed and never pre-allowed: in stream-json mode it arrives as a `can_use_tool` prompt, which the panel answers with a question card (§21.4). (Before, it was disallowed and Claude asked in plain text.)
 - No built-in tool is pre-allowed. In `default` mode Claude Code reads inside the cwd (the repository) without asking; a bare `Read` / `Grep` / `Glob` / `LS` allow rule would also silence the prompt for reads outside it (`~/.ssh`, `~/.promptgraph` with the session token, other repositories), and the pre-allowed `save_graph` / `patch_graph` could then copy what was read into a committed graph file without any prompt.
-- `bypassPermissions` is never used, whatever the app setting of §7.6 says (invariant 5). Destructive MCP tools (`delete_graph`, `cancel_run`, `cleanup_run`) and every write or shell tool are not pre-allowed, so they go through the permission card (§21.4).
-- `CHAT_SYSTEM_PROMPT` (server chat module) tells Claude where it runs: the user sees the graph live; each message starts with a context block (§21.3); use the promptgraph MCP tools (`save_graph` for new graphs, `patch_graph` for edits, keeping ids and positions) and the `design-graph` skill; never call `start_server` or `open_ui`; never approve gates; ask before destructive tools; do not edit repository files or run commands unless asked, because real work happens in graph runs; keep replies short and say what changed in the graph. While a run of the graph is active (the context's `run` with `read-only="false"`), edits change the run live (§8.7): only steps that have not started can change, `get_graph` says which ones did (`runLocks`), and a new step after a finished one starts right away.
+- `--permission-mode` is `default`, or `bypassPermissions` while the app setting of §7.6 is on (invariant 5). `ChatManager` reads the setting at every spawn and records it on the process; when a message arrives for an idle process started with the other value, that process is closed and the turn goes to a new one (`--resume`), so toggling the setting applies to open chats from their next message. A running turn is never interrupted for it. In `default` mode, destructive MCP tools (`delete_graph`, `cancel_run`, `cleanup_run`) and every write or shell tool are not pre-allowed, so they go through the permission card (§21.4). In bypass mode they run without a card. In both modes the process gets `--settings '{"permissions":{"deny":[…]}}'` with `Edit`, `Write` and `NotebookEdit` (`CHAT_DENIED_FILE_TOOLS`) plus `secretDenyRules(PG_HOME)` (§7.6). The bare tool rules remove the file-editing tools from Claude's tool list, so the chat changes only `.promptgraph/`, and only through `save_graph` / `patch_graph`, which validate the graph. The secret rules stop it from reading the token, `state.db`, the hook headers or the logs. Neither set contains Bash: in bypass mode a shell command can still write any file the user can. The system prompt tells Claude not to write files from the shell, but nothing enforces it. Containing Bash would take Claude Code's sandbox (bubblewrap and socat), which promptgraph does not configure. `--permission-prompt-tool stdio` stays: `AskUserQuestion` still arrives as a `can_use_tool` prompt in bypass mode (checked against Claude Code 2.1.326), so the question cards keep working.
+- `CHAT_SYSTEM_PROMPT` (server chat module) tells Claude where it runs: the user sees the graph live; each message starts with a context block (§21.3); use the promptgraph MCP tools (`save_graph` for new graphs, `patch_graph` for edits, keeping ids and positions) and the `design-graph` skill; never call `start_server` or `open_ui`; never approve gates; ask before destructive tools; it cannot edit files (graphs change only through the MCP tools), writes no files with shell commands, and runs commands only when asked, because real work happens in graph runs; keep replies short and say what changed in the graph. While a run of the graph is active (the context's `run` with `read-only="false"`), edits change the run live (§8.7): only steps that have not started can change, `get_graph` says which ones did (`runLocks`), and a new step after a finished one starts right away.
 - It also has Claude ask with `AskUserQuestion` whenever the user has to choose, and, when planning a new graph, ask first (one call, up to 4 questions) about the graph's complexity — **Simple** (2–4 sequential steps), **Standard** (5–8 steps with a test-fix loop or a review), **Complex** (parallel lanes joined by a merge, review loops, approval gates) — plus only what the message and the repository leave open (how the result is checked, how it ends: commit, PR behind an approval, merge; parallelism). No questions for one specific change to the graph on screen. The empty chat offers starters ("Plan a new graph", …) that send such a request.
 
 ### 21.3 Context block
@@ -1283,7 +1329,9 @@ remove this node
 
 `buildChatContextBlock` / `withChatContext` (`packages/shared/src/chat.ts`) build it; attribute values are escaped. With linked issues the tag gets `issues="ENG-1,ENG-2"`.
 
-**Linked issues.** When the graph on screen is linked to Linear issues, the server puts a `<promptgraph-issues graph="…">` block (`buildChatIssuesBlock`) between the context tag and the blank line: each issue's identifier, current state, URL, title and description (cut at 4 000 characters), introduced as data from Linear, not instructions, with closing tags inside the issue text neutralised. `createLinkedIssuesResolver` (`packages/server/src/chat/issues.ts`) reads the issues from the graph file and asks Linear for the rest (`LinearService.issueContext`, the query of §24.5), caching each issue for 2 minutes; without a connection, on an error or after 4 s it uses the file's snapshot (identifier, title, URL) and the block says why. The block is sent once per session and again only when the set of linked issues changes, so turns do not repeat it. The lookup runs before the turn is written: turns are chained per session so they keep their order, Stop drops a turn still waiting for it, and a failed lookup sends the turn without the block. No lookup happens for a graph without issues. The context chip shows the identifiers. "This node" means the selection. The UI shows only the user's text (`stripChatContext` removes the block from history rebuilt from a transcript). Before sending, the web flushes the editor's pending autosave so Claude reads the graph the user sees.
+**Linked issues.** When the graph on screen is linked to Linear issues, the server puts a `<promptgraph-issues graph="…">` block (`buildChatIssuesBlock`) between the context tag and the blank line: each issue's identifier, current state, URL, title and description (cut at 4 000 characters), introduced as data from Linear, not instructions, with closing tags inside the issue text neutralised. `createLinkedIssuesResolver` (`packages/server/src/chat/issues.ts`) reads the issues from the graph file and asks Linear for the rest (`LinearService.issueContext`, the query of §24.5), caching each issue for 2 minutes; without a connection, on an error or after 4 s it uses the file's snapshot (identifier, title, URL) and the block says why. The block is sent once per session and again only when the set of linked issues changes, so turns do not repeat it.
+
+**Images.** `chat:send` may carry `images` (ids of the image store, §25); the turn's content is then the image blocks (`{type: "image", source: {type: "base64", media_type, data}}`, read from the store) followed by the text block, and the text may be empty. A missing image refuses the whole message. The lookup runs before the turn is written: turns are chained per session so they keep their order, Stop drops a turn still waiting for it, and a failed lookup sends the turn without the block. No lookup happens for a graph without issues. The context chip shows the identifiers. "This node" means the selection. The UI shows only the user's text (`stripChatContext` removes the block from history rebuilt from a transcript). Before sending, the web flushes the editor's pending autosave so Claude reads the graph the user sees.
 
 ### 21.4 Permissions
 
@@ -1343,7 +1391,7 @@ When the editor reloads a graph changed outside it (`graphs:changed` from the ch
 
 Chats belong to a tab, as in Linear. Each repository tab's view sits in an inset panel (rounded, bordered, on the darker window frame `--frame`), and below the panel each tab has a bottom bar (§13.4). In a repository tab the bar holds one button per chat opened in that tab (oldest first, at most 8; a busy chat shows a pulsing dot, one waiting for a permission an amber dot), **Ask Claude** (a new chat) and the chat history (every session of the repository, to reopen one). Clicking a chat's button opens its window or, when it is the open one, minimises it; its × takes it out of the bar (the session stays in the history). At most one window is open per tab: it floats at the bottom right of the panel, over the canvas, with the title, a menu (date, cost, Delete chat), Minimize (also Esc, unless a dictation or a menu uses it), **Open as side panel** / **Float over the canvas** and Close. Opened as a side panel, the chat docks to the right of the tab's panel, full height, as a panel of its own: the tab's panel (canvas, inspector) shrinks instead of being covered. The tab view provides that slot (`TabContextValue.sidePanel`, empty and zero-width otherwise) and the chat is portalled into it. Its left edge resizes it (drag, or ←/→ when focused; 320 px to 60 % of the window, default 440 px). The docked choice and the width are remembered per browser (`pg.chat.docked`, `pg.chat.dockWidth`). Home has a panel but no bar (§13.3).
 
-The tab owns the list: `Tab.chats = {repoId, ids, open}` is persisted with the tab set (§13.4), so a reload, a keep-alive eviction or a tab reopened from the session restores its chats; it is dropped when the tab navigates to another repository. Sessions are the repository's (§21.8): two tabs of one repository can show the same chat, and the chat store keeps one view per opened session (fetched once, then live; a reconnect refetches every opened session). A deleted session leaves every bar.
+The tab owns the list: `Tab.chats = {repoId, ids, open}` is persisted with the tab set (§13.4), so a reload, a keep-alive eviction or a tab reopened from the session restores its chats. When the tab leaves the repository (for Home or another repository) the list is set aside in `Tab.parkedChats` (one per repository, most recently left first, at most 20) and restored, open window included, when the tab comes back: the page that goes from a repository to Home, to another repository and back shows the same chats again. Sessions are the repository's (§21.8): two tabs of one repository can show the same chat, and the chat store keeps one view per opened session (fetched once, then live; a reconnect refetches every opened session). A deleted session leaves every bar.
 
 **Ctrl+J** (also **Alt+J**) acts on the active tab's bar: it minimises the open window, else reopens the newest chat of the bar, else starts a new chat. Browsers leave Ctrl+J to pages; it is not handled while a terminal has focus (Ctrl+J is a line feed there) or while a dialog or menu is open.
 
@@ -1561,3 +1609,63 @@ A `linear` node keeps the linked issues up to date with the run's progress: a pr
 5. **Apply.** Per issue, the comment (`commentCreate`) then the state (`issueUpdate`), with the saved key, as the key's user; a failure is recorded for that issue and the others continue. Output `linear.results` (`{ identifier, commented, movedTo, error }`) and a summary in `text` ("ENG-1: commented, moved to In Review"); any failure fails the node, naming the issues. A retry runs the node again from step 1 (new proposal), so already-posted comments are not repeated unless approved again. The personal key needs write access for this step.
 
 The inspector form prefills the default instructions; an unchanged or blank text is saved as "default" (`prompt` absent), so improvements to the default reach existing nodes, and **Use default instructions** resets an override. Cards show "Default/Custom instructions · comments + states · approval".
+
+---
+
+## 25. Pasted images
+
+The chat composer (§21) and the prompt field of `prompt` nodes accept images from the clipboard, as Claude Code's
+input does: with an image on the clipboard, Ctrl+V (or Paste) adds it as an **Image #N** chip instead of text. A
+paste that also carries plain text (cells copied from a spreadsheet arrive as text and as a picture) stays text.
+
+### 25.1 Store
+
+- The browser uploads each pasted image with `POST /api/images` (JSON, base64: the WebSocket caps messages at 1 MB
+  and API writes are JSON only, §14). The daemon checks the signature of the bytes (PNG, JPEG, GIF or WebP; the
+  declared type must match, so an SVG or HTML file can never be stored as an image), refuses images above
+  `MAX_IMAGE_BYTES` (3.75 MB: the Claude API's 5 MB limit once base64-encoded), and writes
+  `~/.promptgraph/images/<sha256>.<ext>` (0600, atomic). The id is that file name: the same image pasted twice is
+  stored once, and an id never names a path outside the store (`ImageIdSchema`).
+- Before uploading, the browser re-encodes through a canvas an image of another type (BMP, TIFF…), one above the
+  limit, or one wider or higher than 2000 px (except an animated GIF that fits): scaled to 2000 px at most, PNG, or
+  JPEG at 85 % when the PNG is still too large.
+- Images are daemon-wide and private to the user, like the worktrees, rather than in the repository: a pasted
+  screenshot is not committed by surprise. The cost: a graph file names images that exist only on the machine that
+  pasted them; elsewhere the node fails at start with "Image #N of the prompt is missing from the image store: paste
+  it again". Nothing deletes images yet (a graph or a chat may still refer to them).
+
+### 25.2 UI
+
+- Chips sit above the chat's text field and below a prompt field, in paste order, numbered from 1 (removing one
+  renumbers the rest, as the prompt sent to Claude does). Hovering or focusing a chip opens a tooltip **above** it
+  with the preview (fetched with `GET /api/images/:id` the first time, kept for the page; an `<img src>` pointing
+  at the API would be refused by the Fetch Metadata rule of §14). × removes the image.
+- At most `MAX_IMAGES_PER_PROMPT` (10) per message or node. Chat messages need text or an image; a message waits for
+  its uploads. Sent messages show their images as read-only chips; after a daemon restart, the history rebuilt from
+  the transcript (§21.8) finds the ids again by hashing the image blocks.
+- A prompt field gives an upload that finishes after the inspector moved to another node to nobody, so it never
+  lands on the wrong prompt. A read-only prompt (a run's snapshot) shows its chips without × and takes no paste.
+
+### 25.3 Chat
+
+`chat:send {text, images?}`: the server reads each image from the store and writes the turn as image blocks followed
+by the text block (§21.3). Claude sees the images directly.
+
+### 25.4 Prompt nodes
+
+`PromptConfig.images?: ImageId[]`. Node consoles are the interactive TUI (§7), which has no way to receive an image
+on its command line, so at start the runner copies the images to `<worktreesDir>/<repo>/<run>/.images/<nodeRun>/
+image-N.<ext>` (0700 / 0600, next to the run's lane worktrees, so the run's cleanup removes them), passes that
+directory with `--add-dir` (the lane session refuses reads outside its worktree, §7.6) and appends to the prompt,
+before the marker instruction:
+
+```
+The user attached 2 images to this prompt. Look at each one with the Read tool before you start:
+- Image #1: /home/u/.local/share/promptgraph/worktrees/app/r1/.images/nr1/image-1.png
+- Image #2: …
+```
+
+Claude Code's Read tool shows an image file to the model. A retry after an interruption resumes the session, which
+already holds the images; a loop iteration that continues its session (§15.4) gets the list again. `command` nodes
+take no images.
+

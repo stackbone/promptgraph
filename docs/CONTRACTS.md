@@ -230,6 +230,7 @@ README.md              prerequisites, the pinned Tauri version, commands, enviro
 | `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan(graph, {previous?, prefer?, reserved?})` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
 | `run-edit.ts` | Live edits (DESIGN §8.7), pure: `runEditLocks(nodeRuns) → RunLocks`, `isEdgeEditable`, `diffRunGraph`, `checkRunEdit(before, after, nodeRuns) → RunEditProblem[]`, `planRunLanes`, `lanePlanToJson` / `lanePlanFromJson`, `RUN_EDIT_REFUSED_CODE`, `RUN_BUSY_CODE` |
 | `layout.ts` | `LAYOUT_DX`/`LAYOUT_DY`, `layeredLayout(graph)` (top to bottom, §19.3), `isLaidOut(graph)` (every node already where layeredLayout puts it, ±0.5 px; the Arrange button is disabled then), `deriveEdgeId`, `edgeIdSet` |
+| `images.ts` | DESIGN §25: `IMAGE_MEDIA_TYPES` (type → extension), `ImageMediaTypeSchema`, `MAX_IMAGE_BYTES` (3.75 MB), `MAX_IMAGES_PER_PROMPT` (10), `ImageIdSchema` (`<sha256 hex>.<png\|jpg\|gif\|webp>`), `ImageIdListSchema` (`PromptConfig.images`, `ChatUserItem.images`, `chat:send.images`), `imageMediaType(id)`, `UploadImageRequestSchema` / `UploadImageResponseSchema` (POST `/api/images`), `GetImageResponseSchema` (GET `/api/images/:id`), `imageLabel(i)` ("Image #i+1") |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
 
 The request/payload/config type aliases (e.g. `SaveGraphRequest`, `StartRunRequest`, `StopPayload`,
@@ -292,7 +293,7 @@ Semantics fixed here (do not re-implement elsewhere):
 
 | Path | Exports |
 |---|---|
-| `config/paths.ts` | `pgHome`, `getPaths` → `PgPaths`, `runDir`, `ptyLogPath`, `hooksSettingsPath`, `worktreePath`, `isInWorktreesDir(paths, realPath)` (at or under `worktreesDir` or its realpath), `graphsDir`, `claudeConfigFile`, `PG_HOOK_SOURCE`, `webDistDir` |
+| `config/paths.ts` | `pgHome`, `getPaths` → `PgPaths`, `runDir`, `ptyLogPath`, `hooksSettingsPath`, `worktreePath`, `pgWorktreesDir(env)` (`PG_WORKTREES_DIR`, else `<PG_HOME>-worktrees` for an explicit PG_HOME, else `$XDG_DATA_HOME/promptgraph/worktrees`; DESIGN §9.1), `isInWorktreesDir(paths, realPath)` (at or under `worktreesDir` or `legacyWorktreesDir`, as configured or as realpath), `graphsDir`, `claudeConfigFile`, `PG_HOOK_SOURCE`, `webDistDir` |
 | `config/child-env.ts` | `claudeBin`, `childEnv` (strips `PG_HOME`, `PG_DESKTOP_*`, `PG_HOOK_ENV_VARS` and the Claude nesting variables, §3), `isClaudeNestingVar(name)`, `PgHookEnv`, `PG_HOOK_ENV_VARS` (`PG_PORT`, `PG_HOOK_HEADER_FILE`, `PG_NODE_RUN_ID`: one node run's, re-added by a Claude runner through `extra`) |
 | `config/token.ts` | `tokenPath(paths)`, `loadOrCreateToken(paths)` (32 bytes base64url; exclusive atomic create: temp file 0600 hard-linked to `token`, EEXIST → the existing value wins; chmod 0600 on every call; an empty file is replaced), `writeToken(paths, token)` (temp + rename, 0600), `newToken()`, `helloProof(token, nonce)`. Only this module, the auth comparisons and the daemon client read the token; nothing prints or logs it |
 | `config/claude-auth.ts` | `runAuthStatus(env, cwd)` (`claude auth status --json` with `childEnv`; parsed also on exit 1; ENOENT → "not found"), `billingModeOf(raw, env)`, `authInfoOf(raw, env, now, overrides?)` (drops account ids), `checkClaudeAuth(env, cwd, run?, now?)` (never rejects; an `ANTHROPIC_API_KEY` key is checked again without it → `apiKeyOverridesLogin`), `ClaudeAuthProbe(env, {run?, now?, ttlMs?})`: `get(repoPath, {refresh?})` (5 min cache per repository, shared in-flight check, `refresh` reuses a check under 1 s old), `peek`, `forget` (DESIGN §23.1) |
@@ -318,8 +319,9 @@ Semantics fixed here (do not re-implement elsewhere):
 | `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` |
 | `hooks/hook-token.ts` | `hookToken(hookSecret, nodeRunId)` (the secret is random per start, memory only, never the token: DESIGN §7.1) |
 | `runners/types.ts` | `Runner`, `RunnerContext`, `RunnerResult`, `NodeControls`, `NodeExecution`, `PredecessorOutput`, `RunnerRegistry` |
-| `runners/claude/args.ts` | `buildClaudeArgs`, `toCliPermissionMode`, `ClaudeLaunchSpec` |
-| `runners/claude/context.ts` | `buildInitialMessage`, `markerInstruction`, `INTERRUPTED_MESSAGE`, `CONTEXT_OUTPUT_LIMIT` |
+| `runners/claude/args.ts` | `buildClaudeArgs`, `toCliPermissionMode`, `ClaudeLaunchSpec` (`addDirs` → `--add-dir=<dir>`, before `--allowedTools`) |
+| `images/image-store.ts` | DESIGN §25: `ImageStore(dir) {put(bytes, declared?) → {id, bytes}, has, read(id) → {mediaType, bytes}, file(id)}` (content-addressed, 0700/0600, atomic), `sniffImageType(bytes)`, `imageIdOf(bytes, type)`, `ImageError` (`invalid_image` 400, `image_too_large` 413, `image_not_found` 404). `DaemonContext.images`; `PgPaths.imagesDir`; `nodeRunImagesDir(laneWorktreePath, nodeRunId)` in `config/paths.ts` |
+| `runners/claude/context.ts` | `buildInitialMessage(node, preds, completion, imagePaths?)`, `imagesInstruction(paths)`, `markerInstruction`, `INTERRUPTED_MESSAGE`, `CONTEXT_OUTPUT_LIMIT` |
 | `runners/claude/hooks-settings.ts` | `buildHooksSettings(pgHookPath, {pgHome})`, `writeHooksSettings(file, pgHookPath, {pgHome})` (both add `permissions.blockReadsOutsideWorkingDirectories: true` and `permissions.deny` = `secretDenyRules(pgHome)`, for `path.resolve(pgHome)` and, when it differs, its realpath: `Read` of `//<home>`, `Read`/`Edit` of `//<home>/token`, `//<home>/state.db*`, `//<home>/runs/**`, `//<home>/servers/**` (pre-M7 records), `//<home>/logs/**` (pre-M7 logs held token URLs), DESIGN §7.6), `secretDenyRules`, `shellQuote` |
 | `runners/claude/pg-hook.ts` | `installPgHook` |
 | `runners/claude/trust.ts` | `preTrustDirectory`, `TRUST_DIALOG_PATTERN` |
@@ -337,6 +339,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `runners/condition-runner.ts` | `ConditionRunner` (+ `evaluatedPredecessor`, `evaluateExitCode`, `evaluateRegex`, `buildJudgePrompt`, `parseJudgeVerdict`, `laneDiffStat`) |
 | `runners/registry.ts` | `createRunnerRegistry`, `RUNNER_NODE_TYPES` (the node types it implements: `GET /api/daemon` `supportedNodeTypes`) |
 | `workspace/lane-manager.ts` | `LaneManager`, `RepoRef {id, path, name}` (`id` = `repoIdFor(path)`), `MergeAttempt` |
+| `workspace/worktree-migration.ts` | `migrateLegacyWorktrees({store, paths, env?, log?})` → `{moved, failed, repairFailed, transcriptDirsCopied}` (DESIGN §11.4), called by `createDaemonContext` before any `RepoContext`; uses `Store.rewriteWorktreePaths(from, to)` and `Store.rewriteTranscriptDir(from, to)` (prefix rewrites, no LIKE) |
 | `workspace/setup.ts` | `runWorkspaceSetup` |
 | `engine/state.ts` | `NODE_TRANSITIONS`, `canTransition`, `assertTransition`, `RUN_TRANSITIONS` |
 | `engine/activation.ts` | `ActivationTracker`, `ActivationDelta`, `LoopIteration` |
@@ -369,6 +372,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `http/routes/login.ts` | `registerLoginRoutes`: `GET /login?code=&next=` (§8) |
 | `http/routes/repos.ts` | `registerRepoRoutes`: `GET/POST /api/repos`, `DELETE /api/repos/:repoId?force=1`, `GET /api/repos/:repoId` (load only) |
 | `http/routes/fs.ts` | `registerFsRoutes`: `GET /api/fs/dirs?path=&hidden=1` → `listDirs` |
+| `http/routes/images.ts` | `registerImageRoutes`: `POST /api/images` (base64 at most `ceil(MAX_IMAGE_BYTES/3)*4` characters, else 413) → `daemon.images.put`, `GET /api/images/:id` → base64 (DESIGN §25) |
 | `http/routes/linear.ts` | `registerLinearRoutes`: `GET /api/linear`, `PUT/DELETE /api/linear/key`, `GET /api/linear/issues?q=&states=`, `GET /api/linear/issue-states?ids=` → `daemon.linear`; `LinearNotConnectedError` → 409 `linear_not_connected`, `LinearApiError` unauthorized → 422 (PUT) / 502 `linear_key_invalid`, unavailable → 502 `linear_unavailable` (DESIGN §24) |
 | `daemon/dir-browser.ts` | `homeDir(env)` (HOME, else `os.homedir()`), `expandHome(input, home)` (`~`, `~/…`; shared with `registry.add`), `listDirs(path?, {env, hidden?})` (default home; not absolute → 422 `path_not_absolute`; `readdir` EACCES/EPERM → 403 `permission_denied`, other failure → 404 `not_a_directory`; directories and symlinks to directories, dot-names only with `hidden`, sorted case-insensitively and numerically; `isGitRepo` = `lstat(<dir>/.git)` succeeds; `parent` null at `/`) |
 | `http/routes/git.ts` | `registerGitRoutes`: `GET /api/repos/:repoId/git/log?limit=` (`GitLogQuerySchema`) → `readGitLog`, `GET …/git/state` → `readGitState` (DESIGN §13.7) |
@@ -1045,7 +1049,7 @@ api/ws.ts                        WsClient({url?, checkSession?, buildVersion?, u
 store/tabs-store.ts              createTabsStore({session, local, initialPath?}) (zustand vanilla), tabsStore() (the page's, from
                                  window storages + URL), setTabsStore (tests), useTabs, activeTab, runTabAction(store, KeyAction),
                                  parsePersistedTabs, tabPath (isSafeNextPath + normalizePath, else "/"). State {tabs: Tab {id, path,
-                                 title?, chats?: TabChats {repoId, ids (≤ MAX_TAB_CHATS = 8), open}}[], activeId, mru, closed: {path, title?, index}[] (≤ 10), lastNavigation {tabId, path,
+                                 title?, chats?: TabChats {repoId, ids (≤ MAX_TAB_CHATS = 8), open}, parkedChats?: TabChats[] (≤ MAX_PARKED_CHATS = 20)}[], activeId, mru, closed: {path, title?, index}[] (≤ 10), lastNavigation {tabId, path,
                                  replace} | null}; actions open(path, {activate, dedupe = true}) → id, close, activate, navigate(id,
                                  path, {replace?}), applyHistory(id, path), next(±1), goto(index | "last"), reopenClosed, setTitle,
                                  move, setChats(id, chats | null) (chats survive navigation within their repository only;
@@ -1078,6 +1082,14 @@ components/chat/ChatDock.tsx     ChatDock (in RepoView, inside the view): bar it
                                  without a tab), the open ChatWindow, Ctrl+J while its tab is active, drops deleted sessions
 components/chat/ChatPanel.tsx    ChatWindow({sessionId, actions {onMinimize, onClose, expanded, onToggleExpanded}}) (floating;
                                  Esc minimises unless used or dictating), ChatConversation({sessionId}), chatTitle, ContextChip
+components/common/ImageAttachments.tsx  useImagePaste({owner, images, onChange, disabled?}) → {onPaste, uploading} (image-only pastes
+                                 become uploads; a result arriving after `owner` changed is dropped), ImageAttachments({images,
+                                 onRemove?, uploading?}): "Image #N" chips, preview in a tooltip above (DESIGN §25). Used by the
+                                 chat Composer, user ChatItems (read-only) and DictationTextArea (`images`, `onImagesChange`:
+                                 the prompt node's field)
+lib/images.ts                    clipboardImages(dataTransfer), uploadImage(blob) → id (re-encodes other types / > MAX_IMAGE_BYTES /
+                                 > 2000 px through a canvas), imagePreview(id) / useImagePreview(id, enabled) (data URLs cached
+                                 per id), clearImagePreviews (tests)
 store/toast-store.ts             useToastStore {toasts, toast, dismiss} (the sequence counter lives in the store), toast()
 store/daemon-store.ts            useDaemonStore: info, repos (sorted by last opened; live from repo:status / repo:removed), settings,
                                  connection, signedOut, versionMismatch, removed {id, path, name}, usageLimits (live from usage:limits);
@@ -1104,8 +1116,8 @@ components/home/FolderPicker.tsx PathInput (path combobox with folder suggestion
 views/RoutedView.tsx             the view of the location: Home, NotFound, or RepoRoot (RepoRemoved while removed, else RepoView)
 views/RepoView.tsx               one view of a repository: own run + UI stores, shared editor store, repo subscription, route sync;
                                  active from the TabContext (prop overrides; true outside tabs); reports its title and editor to the tab
-views/Workspace.tsx              editor / run layout (banners, canvas, inspector sidebar, drawer, dialogs; no top bar, no left sidebar:
-                                 CanvasOverlay floats the linked issues top left, the save indicator and inspector toggle top right;
+views/Workspace.tsx              editor / run layout (banners, canvas, drawer, InspectorDock, dialogs; no top bar, no left sidebar:
+                                 CanvasOverlay floats the linked issues top left, the save indicator top right;
                                  CanvasToolbar sits at the bottom of the canvas); report route replaces the canvas row
 views/NotFound.tsx               FullScreenMessage, NotFound (link Home), RepoRemoved (Add again / Close tab; outside tabs: Home)
 components/tabs/TabStrip.tsx     role=tablist, roving tabindex (arrows, Home/End; Enter/Space activate, Delete closes); per tab: title,
@@ -1142,12 +1154,13 @@ components/header/               RunButton (Run/Cancel/Resume), ProblemsButton, 
                                  ArrangeButton, RunSelector (links, opens upwards), pending approvals (links), SaveIndicator
 components/toolbar/              CanvasToolbar: role=toolbar "Graph toolbar", bottom centre of the canvas: NodesMenu, RunSelector,
                                  ShownRunInfo | Undo, Redo, Arrange | RunButton (icon-only except the run menu and Run),
-                                 ProblemsButton as a badge right of the toolbar (popover listing the problems)
+                                 ProblemsButton as a badge centred above the toolbar (popover above it listing the problems)
 components/palette/              NodesMenu (icon button, popover above the toolbar; hidden while dragging, closed on add/drop) and
                                  Palette: draggable node types (prompt, command, shell, commit, pr, approval, merge; condition when phase 2)
 components/canvas/               React Flow canvas: snap grid, minimap, edge creation (error/true/false ports in phase 2), read-only in run mode
 components/nodes/                node cards: status colour (§8.2), elapsed time, activity, lane badge, tokens/cost, validation outline + tooltip
-components/inspector/            node config forms; run mode: NodeRun details (output, session, branch, timings, error, usage) + controls
+components/inspector/            InspectorDock (docked in the tab's side slot, first, resizable, no collapse); node config forms;
+                                 run mode: NodeRun details (output, session, branch, timings, error, usage) + controls
 components/terminal/             drawer with tabs; xterm + fit + web-links; live or replayed; "Reopen session". TerminalView: the
                                  Terminal is created at mount, opened (and fitted) on its first visible render only; attaches without a
                                  size while hidden; never fits, focuses, sends pty:input or pty:resize while hidden; when shown it
@@ -1255,7 +1268,7 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
   `externalChange` (file changed on disk while dirty), `discarded`, multi-selection `selectedNodeIds/selectedEdgeIds`
   (`selectedNodeId/EdgeId` only when exactly one element is selected) and actions; `RunStore extends RunState` adds
   `graphId`, `detailError`, `detailNotFound`, `selectedNodeId` (run-canvas inspection); `UiStore extends UiState` adds
-  `tabMeta`, `drawerOpen`, `inspectorOpen`, `inspectorWidth`, `lastLoopSpec`. Test seams: `createEditorStore(…,
+  `tabMeta`, `drawerOpen`, `lastLoopSpec`. Test seams: `createEditorStore(…,
   {persistence})`, `createRunStore(…, deps)`, `createRepoCache(id, api)`, `new WsClient(opts)`, `createTestView()`,
   `src/test-daemon.ts` (fake daemon behind fetch + FakeSocket, `resetGlobals`).
 - `WsClient.resizePty(ptyId, cols, rows)` remembers the size for re-attach. On every `pty:attached` (first attach and

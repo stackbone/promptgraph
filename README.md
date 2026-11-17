@@ -253,7 +253,7 @@ keep talking to it.
 ### Lanes and worktrees
 
 Steps never run in your checkout. Each run works in **git worktrees** under
-`~/.promptgraph/worktrees/<repo>/<run-id>/<lane>`, on branches named
+`~/.local/share/promptgraph/worktrees/<repo>/<run-id>/<lane>`, on branches named
 `<prefix>/<run-short-id>/<lane>` (prefix `pg/<graph-id>` by default) created from the graph's base
 branch. A straight path of steps shares one lane. When the graph fans out, each branch gets its own
 lane (forked from the parent lane's state) and runs in parallel, up to `maxParallelClaude` Claude
@@ -355,7 +355,7 @@ conditions are counted too. The cost is an estimate from public per-model prices
 | `~/.promptgraph/daemon.json` | The running daemon's pid, port and version (mode 0600, no secret), removed when it stops |
 | `~/.promptgraph/port` | The last port the daemon used (the sticky port) |
 | `~/.promptgraph/runs/<run-id>/` | Terminal logs and the hook settings of each run |
-| `~/.promptgraph/worktrees/` | Lane worktrees |
+| `~/.local/share/promptgraph/worktrees/` | Lane worktrees (`$XDG_DATA_HOME` or `PG_WORKTREES_DIR` override it; moved there from `~/.promptgraph/worktrees/` at daemon start) |
 | `~/.promptgraph/settings.json` | App settings (notifications, voice dictation) |
 | `~/.promptgraph/models/` | Optional whisper.cpp models for voice dictation (you put them there) |
 | `~/.promptgraph/locks/` | `daemon.pid` (the daemon's pid, for messages only: the lock itself is held by the kernel) and one `<repo-key>.pid` per registered repository, which keeps promptgraph versions from before the daemon from starting on it |

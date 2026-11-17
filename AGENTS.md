@@ -47,7 +47,7 @@ docs/
 - Dev: `pnpm --filter @promptgraph/server dev` (the daemon in the foreground, `tsx watch`) + `pnpm --filter @promptgraph/web dev`
   (vite; it proxies to the daemon on `PG_DEV_PORT`, default 4777, and adds no credentials: sign in with
   `promptgraph open --print-url --web-port <vite port>`). Use a separate `PG_HOME` when a promptgraph daemon already runs
-- Manual runs of the daemon or CLI: always with a temp `PG_HOME`, temp repositories, `PG_DAEMON_SHELL_ENV=0` and
+- Manual runs of the daemon or CLI: always with a temp `PG_HOME` (worktrees then go to `<PG_HOME>-worktrees`), temp repositories, `PG_DAEMON_SHELL_ENV=0` and
   `PG_PORT_DEFAULT=0`, never against the user's `~/.promptgraph`
 - Desktop (needs Rust + WebKitGTK, see `packages/desktop/README.md`): `pnpm --filter @promptgraph/desktop tauri:dev`
   (set `PROMPTGRAPH_BIN` to a CLI of this checkout); `pnpm --filter @promptgraph/desktop runtime:prepare` stages the bundled
@@ -73,9 +73,9 @@ Do not break these without updating the design document first:
 2. **Hooks never block Claude.** The `pg-hook` script forwards the payload and always exits 0.
 3. **The engine is activation-based** (§8.1), not a one-shot topological sort, so conditions and loops (Phase 2) remain extensions.
 4. **Nothing leaves the machine without approval.** `pr` nodes require an approval gate by default; no code path pushes without one.
-5. **`bypassPermissions` is never a default** and never a graph value: only the user's own app setting (Settings → Bypass permissions, off by default, DESIGN §7.6) starts node consoles in it, with a warning in the UI. The chat never uses it.
+5. **`bypassPermissions` is never a default** and never a graph value: only the user's own app setting (Settings → Bypass permissions, off by default, DESIGN §7.6) starts node consoles and chat processes in it, with a warning in the UI (Settings, graph settings, the chat's status line).
 6. **The daemon binds to `127.0.0.1` only** and every REST and WS request requires the persistent local token (Bearer) or a server-side session cookie (created through a one-time login code, revocable, Fetch-Metadata checked); hook requests require their node run's hook token. The token lives only in `~/.promptgraph/token` (0600): it is never printed, logged, put in any URL or tool result, sent to a daemon that has not proved it knows it (`/api/daemon/hello`), or made available to Claude PTYs (no `PG_HOME`, `permissions.deny` in `--settings`). GET requests have no side effects.
-7. **One daemon per user (`PG_HOME`) manages every registered repository**, each in its own `RepoContext` (graph store, lanes, engine); a repository is identified by its realpath and `repoId`, and is never managed twice (kernel-held daemon lock; the daemon also holds the legacy per-repo locks so pre-M7 binaries refuse to start). A failure in one repository never takes the daemon down. Worktrees live in `~/.promptgraph/worktrees/`, never inside the target repo.
+7. **One daemon per user (`PG_HOME`) manages every registered repository**, each in its own `RepoContext` (graph store, lanes, engine); a repository is identified by its realpath and `repoId`, and is never managed twice (kernel-held daemon lock; the daemon also holds the legacy per-repo locks so pre-M7 binaries refuse to start). A failure in one repository never takes the daemon down. Worktrees live in `~/.local/share/promptgraph/worktrees/` (`pgWorktreesDir`, DESIGN §9.1), never inside the target repo and never inside `PG_HOME` (its deny rule would cover them); older ones are migrated at daemon start (§11.4).
 8. Joining parallel lanes always goes through a `merge` node.
 
 ## Scope guardrails
