@@ -146,7 +146,7 @@ export function evaluateExitCode(ev: Extract<ConditionEvaluator, { kind: "exitCo
   if (skippedByUser(pred)) return skippedEvaluation(pred);
   const exitCode = pred.output?.exitCode;
   if (exitCode === undefined) {
-    throw new Error(`Exit-code condition: predecessor "${labelOf(pred)}" (${pred.type}) has no exit code; connect a shell node`);
+    throw new Error(`Exit-code condition: predecessor "${labelOf(pred)}" (${pred.type}) has no exit code; connect a shell or Run tests node`);
   }
   if (exitCode === null) {
     return { result: false, reason: `"${labelOf(pred)}" has no exit code${pred.output?.timedOut ? " (timed out)" : " (killed)"}; expected ${ev.equals}.` };

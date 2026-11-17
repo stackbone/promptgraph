@@ -1,4 +1,6 @@
 import { createEmptyGraph, webRoutes, type RepoSummary } from "@promptgraph/shared";
+import { getRepoCache } from "../../store/repo-cache";
+import { openRepoSettings } from "../../store/repo-settings-dialog";
 import { useState, type FormEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { GraphNameField, type GraphNameValue } from "../common/GraphNameField";
@@ -39,6 +41,15 @@ export function AddRepositoryForm({ className, onAdded, heading = true }: { clas
       setPath("");
       onAdded?.();
       navigate(webRoutes.repo(repo.id));
+      // A repository without settings yet: offer to set up how it starts and is tested (DESIGN §26.1).
+      void getRepoCache(repo.id)
+        .getState()
+        .api.repoSettings()
+        .then((s) => {
+          getRepoCache(repo.id).getState().setRepoSettings(s);
+          if (!s.exists) openRepoSettings(repo.id, { intro: true });
+        })
+        .catch(() => undefined);
     } catch (err) {
       const code = err instanceof ApiRequestError ? err.body.code : undefined;
       setError((code && ADD_ERRORS[code]) ?? errorMessage(err));

@@ -235,6 +235,8 @@ Roots are nodes with no incoming (non-loop) edges. A graph may have several root
 | `prompt` | Claude (PTY) | `prompt`, `images?` (pasted images, §25), `context`, `model?`, `effort?`, `permissionMode?`, `allowedTools?`, `completion?` | Last assistant message |
 | `command` | Claude (PTY) | `command` (e.g. `/simplify`, `/code-review high`), plus same options as `prompt` | Last assistant message |
 | `shell` | Shell (PTY) | `run`, `timeoutSec?`, `env?` | Exit code + tail of stdout/stderr (last 200 lines) |
+| `test` | Shell (PTY), the repository's checks (§26.3) | `checks?`, `continueOnFailure` | Exit code, tail, one result per check |
+| `app` | AppManager (PTY), one of the repository's apps (§26.3) | `appId?`, `readyTimeoutSec?` | The app's URL; it keeps running until the run ends |
 | `commit` | Git | `message?` (fixed) or `generateMessage: true` (default), `squashCheckpoints: true` (§9.3) | Commit SHA, message |
 | `pr` | Git + `gh` | `title?`/`body?` or generated, `draft: true`, `base?` (default `baseBranch`), `requireApproval: true`; a graph linked to issues adds their identifiers to both (§24) | PR URL |
 | `approval` | — | `message?`, `showDiff: true` | `approved` / `rejected` + comment |
@@ -517,7 +519,7 @@ Checkpoints are regular commits on the lane branch. A later `commit` node with `
 
 ### 9.4 New-lane setup
 
-When a worktree is created: `git worktree add -b <branch> <path> <from-ref>`, then `settings.workspaceSetup` (e.g. `pnpm install`) runs as a hidden shell step shown as a small badge on the first node of the lane. Failure fails that node.
+When a worktree is created: `git worktree add -b <branch> <path> <from-ref>`, then the repository settings' local files are copied into it and `settings.workspaceSetup` (else the repository's `setup`, §26.6; e.g. `pnpm install`) runs as a hidden shell step shown as a small badge on the first node of the lane. Failure fails that node.
 
 ### 9.5 Merge node
 
@@ -564,7 +566,7 @@ git update-ref refs/promptgraph/<run-id>/<node-run-id>/<start|end> <sha>
 
 ### 11.1 Graph files
 
-`.promptgraph/graphs/*.json` in the repo. Saved on every edit (debounced 500ms). Validated with zod on load; invalid files are shown with the error and not runnable.
+`.promptgraph/graphs/*.json` in the repo. Saved on every edit (debounced 500ms). Validated with zod on load; invalid files are shown with the error and not runnable. Next to them, `.promptgraph/repo-settings.json` holds the repository settings (§26.1).
 
 ### 11.2 SQLite (`~/.promptgraph/state.db`)
 
@@ -733,6 +735,11 @@ Repository routes, all under `/api/repos/:repoId` (404 `unknown_repo` for an unr
 | GET/POST | `/chat/sessions` | This repository's chat sessions / create one (`{ model? }`), §21 |
 | GET | `/git/log?limit=` | `GitLogResponse` for the Git graph panel (§13.7): the state below plus at most `limit` commits (default 500, max 5000; 400 outside that) of every local branch, remote branch and tag plus HEAD in topological order, each with its parents and refs, and `hasMore`. Read-only git calls |
 | GET | `/git/state` | `GitStateResponse`: HEAD (ref, hash, upstream with ahead/behind counts), the main checkout's uncommitted changes counted (added, modified, deleted) and a `signature` of HEAD, the shown refs and those counts; polled by the Git graph (§13.7). Read-only git calls |
+| GET/PUT | `/settings` | `RepoSettingsResponse` (settings, whether the file exists, its hash, a parse error, the analysis state) / save `{ settings, baseHash }` (409 `settings_conflict`), §26.1 |
+| POST | `/settings/analyze` | Start the analysis with Claude (Haiku, read-only); 409 `analysis_running` (§26.2) |
+| GET | `/apps` | `AppsStatusResponse`: started applications (§26.4) |
+| POST | `/apps/start`, `/apps/stop` | `{ appId?, nodeRunId? }` start one or every configured app in the main checkout, or in that step's worktree (409 `no_apps` / `no_worktree`, §26.7) / `{ ptyId? }` stop one process or every app the button started |
+| POST | `/checks/run` | `{ checks?, nodeRunId? }` run the checks once by hand in the main checkout or a step's worktree; `{ ptyId, title }` of its terminal (§26.7) |
 | GET/DELETE | `/chat/sessions/:id` | Session + item history + open permission prompts + partial streamed text / delete (kills the process; the Claude transcript stays) |
 
 Hooks: `POST /hooks/:nodeRunId/:event` stays unscoped. Node run ids are unique across repositories, the `HookRouter` is daemon-wide and keyed by node run id, and the handler registered for that id belongs to the owning repository's execution, so the hook reaches the right engine without naming the repository. `pg-hook` and `hooks.json` are unchanged; `PG_PORT` is the daemon's port.
@@ -752,6 +759,8 @@ One socket per page, whatever the number of tabs and repositories. Run and PTY t
 { type: "run:update", repoId, run }           // to clients subscribed to the repo
 { type: "run:deleted", repoId, runId, graphId } // to clients subscribed to the repo
 { type: "graphs:changed", repoId, graphId }   // to clients subscribed to the repo
+{ type: "repo-settings:update", repoId, state } // RepoSettingsResponse (§26.2); to clients subscribed to the repo
+{ type: "apps:status", repoId, apps }         // AppProcess[] (§26.4); to clients subscribed to the repo
 { type: "node:update", nodeRun }              // to clients subscribed to the run
 { type: "lane:update", lane }                 // to clients subscribed to the run
 { type: "brief:update", entry }               // RunBriefEntry (§13.6); to clients subscribed to the run
@@ -790,7 +799,7 @@ The client reference-counts its subscriptions (two tabs on one run share one `su
 
 Every view has a URL (§13.2) and lives in an in-app tab (§13.4). The views are the **overview** (Home and a repository's graphs, §13.3), the **graph editor**, a **run** (the canvas in run mode), a **node run** (a run with one node selected and its terminal open) and the **run report** (§13.1). The graph editor and run views are made of:
 
-- **No top bar.** Graphs are picked in the overview (§13.3); the graph is renamed in the inspector's graph settings (**Name**, saved on blur or Enter, one undo step; the file name stays) and deleted from its overview card. No left sidebar either: the node palette, the **run menu** and the run controls live in the **canvas toolbar**. Floating over the **top left of the canvas**: the graph's linked Linear issues (§24.3); over its **top right**: the autosave indicator.
+- **No top bar.** Graphs are picked in the overview (§13.3); the graph is renamed in the inspector's graph settings (**Name**, saved on blur or Enter, one undo step; the file name stays) and deleted from its overview card. No left sidebar either: the node palette, the **run menu** and the run controls live in the **canvas toolbar**. Floating over the **top left of the canvas**: the graph's linked Linear issues (§24.3); over its **top right**: the autosave indicator and the **Run app** button (§26.4).
 - **Canvas toolbar**: one bar floating at the bottom centre of the canvas while a graph is open, like a design tool's. In order: **Nodes** (opens the node palette above the bar: a click appends a node below the last one and closes it; dragging a node type hides it so the drop lands on the canvas, and closes it once dropped; disabled while a run is shown), the **run menu** (opens upwards), the shown run's cost and **Report** (run mode only); a separator, **Undo**, **Redo** and **Arrange**; and a separator, Resume (a paused run with nothing to retry or skip) and Run / Cancel. Every button is an icon with a tooltip except the run menu and the run action. Only while the editor has problems (and no run is shown), a problems badge ("2 errors · 1 warning") sits centred just above the toolbar, outside it, so the toolbar keeps its size and position; it opens a popover above it, centred, listing the problems, and clicking one with a node or edge selects it and closes the popover.
 - **Run menu**: what the canvas shows, **Editor** or one of the graph's runs (the run history lives only there; there is no runs panel). Each run row shows its status, number, start, duration, cost and what waits for the user, and links to the run; on hover or focus (always on the selected row) it shows **Report** and **Delete**. Delete asks for a confirmation and is disabled while the run is running or paused (cancel it first): it removes the run's worktrees and the branches cleanup removes (pushed branches and branches with commits stay), its rows, events and terminal logs, and its snapshot refs (`DELETE /api/repos/:repoId/runs/:id`, `run:deleted`); a view showing that run goes back to the editor. ↑/↓ move between the rows. The repository's pending approvals and the settings are in the tab strip (§13.4), as is the app logo; the repository's name is in the tab title.
 - **Canvas** (React Flow): minimap (bottom right), snap to grid, node types dragged in from the toolbar's Nodes menu. Floating over its top right corner: a "Saving…" spinner while an edit is being autosaved (nothing once saved; the error if a save fails). **Arrange** re-places every node with the automatic top-to-bottom layout (§19.3), overwriting the saved positions (autosaved as one edit, so Undo restores them), then fits the graph in view; it is disabled while the graph is already arranged, has fewer than two nodes, is read-only or a run is shown. The canvas's own controls (bottom left) are zoom in/out and fit view. In run mode nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance); the run canvas itself is not edited. While a run is active the graph editor stays editable for the steps that have not started (§8.7): nodes that started show a lock (`frozen`: only moved or renamed; `config`: config editable for the next attempt, not deleted), connections into them and their deletion are refused, graph settings, name and linked issues are disabled, and the palette works. A save the run refuses keeps the local edits unsaved behind a banner with the reason and **Discard changes** (reload from disk); validation errors keep them unsaved until fixed. The run canvas refetches the run when its `graphRev` changes, so added steps appear there too.
@@ -1670,3 +1679,165 @@ Claude Code's Read tool shows an image file to the model. A retry after an inter
 already holds the images; a loop iteration that continues its session (§15.4) gets the list again. `command` nodes
 take no images.
 
+---
+
+## 26. Repository settings: apps and tests
+
+Graphs kept repeating two things in their prompts and shell steps: how the project starts and how it is tested. A
+repository now says it once, in its **repository settings**, and two node types and a canvas button use them. The
+commands are found by a Claude analysis or written by hand.
+
+### 26.1 Settings file
+
+`.promptgraph/repo-settings.json` in the main checkout, next to the graphs (§11.1), so it can be committed and shared
+(`RepoSettingsSchema`, `packages/shared/src/repo-settings.ts`):
+
+```ts
+type RepoSettings = {
+  version: 1;
+  apps: { id; name; run; cwd: string /* relative, "" = root */; url?: string }[];      // at most 20
+  checks: { id; name; run; cwd: string; timeoutSec?: number }[];                       // at most 30
+  copyFiles: string[];   // ignored local files copied into each new worktree (§26.6)
+  setup?: string;        // worktree setup command when a graph has no workspaceSetup (§26.6)
+  analyzedAt?: number;   // set by the analysis (§26.2)
+  notes?: string;        // what the analysis could not determine
+};
+```
+
+- `id`s are `[a-z0-9-]` and unique per list; `app` / `test` nodes name them. The dialog derives an id from the name of
+  a new row and never changes an existing one, so nodes keep pointing at the same command after an edit.
+- `cwd` is relative to the repository root (or the lane worktree), never absolute and never with `..`.
+- An app's `url` is optional: without it the first URL the command prints is used (§26.4).
+- `RepoSettingsService` (server) reads the file on every call, so a hand edit or a `git pull` is picked up, and writes
+  it atomically. A missing file is "not configured" (empty lists); an invalid one is reported (`error`) and treated as
+  empty, and saving replaces it. Saves carry the hash they started from (`baseHash`, null when there was no file):
+  409 `settings_conflict` when the file changed meanwhile.
+- Running these commands has the same trust as a graph's `shell` steps: they come from the repository and run only on
+  an explicit action (a run, or the Run app button).
+
+### 26.2 Analysis
+
+**Analyse with Claude** (`POST …/settings/analyze`) runs one headless call in the main checkout:
+`claude -p --output-format json --json-schema <RepoAnalysisOutputSchema> --model haiku` with `--tools Read,Glob,Grep
+--allowedTools Read,Glob,Grep --permission-mode dontAsk --strict-mcp-config --no-session-persistence`
+(`runHeadless`'s `readOnlyTools`): it may read the repository (CLAUDE.md and project settings load, they often say how
+the project runs) but run nothing, edit nothing and reach no MCP server. Timeout 5 minutes. The prompt asks for the
+dev-server commands of each application, the non-interactive test and check commands (CI's when there are any, no
+watch modes, no installs), the package manager the lock files imply and short notes; a re-analysis is given the
+current settings to keep what is right.
+
+The answer is normalised (`toRepoSettings`): ids from the names, `./` stripped from directories, invalid entries
+(an empty command, a `..` directory, a bad URL, which is dropped alone) left out; nothing usable → failed. A success
+**replaces** the file (the dialog says so) and sets `analyzedAt`. One analysis at a time per repository (409
+`analysis_running`); its state (`RepoAnalysis`: idle | running | succeeded | failed, times, error) lives in memory
+and is broadcast as `repo-settings:update` with the settings, so the dialog can be closed meanwhile.
+
+**When.** Registering a repository from Home's add dialog opens the settings dialog in its *Set up* form when the
+repository has no settings file, with the analysis as the first action; nothing is analysed without a click (it
+spends tokens). It is also in Settings → **Repository settings…**, in the palette entries and node forms of the
+two node types while nothing is configured, and in the Run app menu.
+
+### 26.3 `test` and `app` nodes
+
+| Type | Runner | Config | Output |
+|---|---|---|---|
+| `test` ("Run tests") | `TestRunner` → ShellRunner (PTY) | `checks?` (ids; absent = all, in the settings' order), `continueOnFailure` (true) | `exitCode`, `stdoutTail`, `checks: {id, name, status: passed \| failed \| skipped, exitCode, durationMs}[]` |
+| `app` ("Start app") | `AppRunner` → AppManager (PTY) | `appId?` (absent = the first app), `readyTimeoutSec?` (180) | `app: {appId, name, url}`, `text` |
+
+- **test** builds one script (`testScript`): per check a start marker line, `(cd <cwd> && sh -c <run>)` (wrapped in
+  `timeout -k 5 <s>` when it has a timeout: exit 124), an end marker with its exit code; it exits 1 when any failed,
+  and without `continueOnFailure` stops at the first failure (the rest are `skipped`). The ShellRunner runs it in the
+  node's PTY (id = node run id), so the terminal shows every check, and the runner times the checks from the marker
+  lines. It succeeds when all pass, else fails with "2 of 3 checks failed: Lint, Unit tests". Its `exitCode` lets an
+  exit-code condition follow it like a shell step (the validator and the canvas treat `shell` and `test` alike:
+  edges into an exit-code condition default to `always`).
+- **app** starts the app in the lane worktree through the AppManager (PTY id = node run id) and succeeds once it is
+  reachable (§26.4), with the URL in its output: the next `fresh` prompt gets it in its context block. It fails
+  when the app exits first or is not reachable within `readyTimeoutSec`. Done marks it running without a URL;
+  Fail and Cancel stop it. **The process keeps running** for the following steps (an end-to-end check, screenshots)
+  and is stopped when the run reaches a final status (succeeded, failed, cancelled); a paused run keeps it, a daemon
+  stop kills it like every PTY (so a run resumed after a restart has no app running: retry the `app` node). Two
+  lanes starting the same app compete for its port; that is left to the graph's author.
+- Both read the settings when the node starts (not the run's snapshot), so fixing a command and retrying works.
+- **Validation** (`ValidateOptions.repoCommands`, given by the engine at run start and live edits, by
+  `POST …/validate` and by the editor once the settings are loaded): an `app` node with no app configured or an
+  unknown `appId`, or a `test` node with no check configured or unknown ids, is an error (`repo_command_missing`). A
+  graph file stays valid on its own: other checkouts may have other settings.
+- **UI.** In the palette, while nothing is configured, the two entries are greyed with "No app/tests configured. Set
+  up…" (opening the settings) instead of being draggable. The inspector picks the app / the checks (none ticked =
+  all) and links to the settings; the node run details show the URL (clickable) and one line per check.
+
+### 26.4 Running apps and the Run app button
+
+`AppManager` (one per repository, `RepoContext.apps`) runs `sh -c <run>` in a PTY of the repository (`OwnedPtys`,
+so removing the repository or stopping the daemon kills them) in `<root>/<cwd>`, and tracks `AppProcess`
+(`ptyId`, `appId`, `name`, `runId`/`nodeRunId` or null, `status: starting | ready | exited`, `url`, `exitCode`).
+A process is **ready** when:
+
+- with a configured `url`: that host:port is printed, or its port accepts a TCP connection (probed every second);
+- without one: the first http(s) URL it prints, local addresses first (`pickAppUrl`: a dev server also prints its
+  network address), `0.0.0.0` / `[::]` rewritten to `localhost` (`extractUrls`).
+
+Exited processes stay listed (the last 10) so the button can say what happened. Every change is broadcast as
+`apps:status` (`AppsStatusResponse` over REST: `GET …/apps`, `POST …/apps/start {appId?}`, `POST …/apps/stop
+{ptyId?}`; start without an id starts every configured app not already running from the button, stop without one
+stops every app the button started). Button PTYs are `app-<id>`, their logs in `runs/apps-<repoId>/` (§11.2).
+
+The **Run app** button floats over the canvas's top right, after the autosave indicator (§13), in the editor and in
+run mode:
+
+- nothing configured → *Run app* opens the repository settings;
+- idle → *Run app* starts every app in the **main checkout** and opens one terminal tab per app in the terminal
+  drawer (§13), where its output is live and typable;
+- starting → *Starting…* (a click shows its terminal);
+- ready → *Open app* opens the URL in a new browser tab. The desktop window hands only `https:` URLs to the system
+  browser (§20.2), so a local `http:` URL is copied to the clipboard there, with a toast;
+- running without a known URL → *App running* (its terminal).
+
+Its menu lists every app with its state and URL, opens each one's URL or terminal, starts the others, stops them,
+shows the last exits and opens the repository settings. Closing a terminal tab does not stop the app. Apps started by
+`app` nodes are not the button's: they have their node's terminal and stop with their run.
+
+### 26.5 Authoring guidance
+
+The MCP server has `get_repo_settings` (apps, checks, whether each node type can run). `graph_reference` and the
+`design-graph` skill tell Claude to verify work with a `test` node when checks are configured, never by appending
+"then run the tests" to a prompt (the run cannot see or loop on that), to use `shell` only for commands the
+settings lack, and to put an `app` node before a step that needs the running application. The `review-run` skill
+suggests moving such in-prompt checks into a `test` node.
+
+### 26.6 Worktree preparation
+
+A run works in git worktrees (§9), which hold only what git tracks: no `.env`, no `node_modules`. Commands that work
+in the main checkout (and the Run app button, which uses it) can therefore fail in a `test` or `app` node. The
+repository settings prepare each new worktree, in the lane setup of §9.4 (same badge on the lane's first node,
+same retry when it fails):
+
+1. **`copyFiles`** (relative paths of files or directories, at most 50, usually ignored by git: `.env`,
+   `apps/web/.env.local`) are copied from the main checkout into the worktree (`copyRepoFiles`): a path missing in
+   the checkout is skipped, one already in the worktree (tracked by git) is never overwritten, symbolic links are
+   copied as links, and a path leaving the repository is refused. The event `lane.files_copied` lists what was
+   copied, missing or kept. The copies live in the worktree under `pgWorktreesDir` and go with it at cleanup; the
+   Claude sessions of that lane can read them, as they could read the main checkout's.
+2. **The setup command**: the graph's `settings.workspaceSetup` when it has one, else the repository's `setup`
+   (e.g. `pnpm install --frozen-lockfile`).
+
+Both are read when the lane is set up, so fixing them and retrying the node works. The analysis (§26.2) proposes
+`setup` and the ignored local files it finds (never dependency or build directories, never their contents).
+
+### 26.7 Tests and apps in a step's worktree, by hand
+
+Right-clicking a step of the run canvas that has a lane opens a menu for that lane's worktree (`NodeWorktreeMenu`),
+to check its work by hand while the worktree exists (until cleanup, §9.6; `keepWorktrees` decides how long):
+
+- **Run tests in this worktree**: `POST …/checks/run {nodeRunId}` runs every configured check once (`testScript`, the
+  same script as a `test` node) in a PTY `checks-<id>` that opens in the terminal drawer, titled with the branch. It is
+  not part of the run and changes no node. The Run app menu has the same for the main checkout (no `nodeRunId`).
+- **Start the app in this worktree**: `POST …/apps/start {nodeRunId}` starts the configured apps there (each in its
+  terminal tab), tagged `AppProcess.worktree = {runId, laneId, branch}`; once ready the menu offers **Open <app>**
+  (its URL), its terminal and **Stop**. One process per app and worktree; the main checkout's apps (the button's) are
+  separate. An app in a worktree may want the same port as the main checkout's: that is left to the user.
+
+The daemon resolves `nodeRunId` to its lane and refuses (404) a node run of another repository and (409
+`no_worktree`) a lane whose worktree is gone. Before cleanup removes a worktree, the AppManager stops every process
+running in it (`LaneManagerDeps.beforeRemove` → `stopIn`), including the apps of `app` nodes.

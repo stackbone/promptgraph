@@ -1,4 +1,4 @@
-import { nodeDisplayLabel, type ClaudeAuthInfo, type GraphListItem, type NodeRun, type RepoInfoResponse, type RepoSummary, type RunDetail, type SlashCommand } from "@promptgraph/shared";
+import { nodeDisplayLabel, type AppProcess, type RepoSettingsResponse, type ClaudeAuthInfo, type GraphListItem, type NodeRun, type RepoInfoResponse, type RepoSummary, type RunDetail, type SlashCommand } from "@promptgraph/shared";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { ApiRequestError, errorMessage, repoApi, type RepoApi } from "../api/rest";
@@ -56,6 +56,10 @@ export interface RepoCacheState {
   summary: RepoSummary | null;
   /** How Claude is billed in this repository (§23.1); null until loaded or when the request failed. */
   claudeAuth: ClaudeAuthInfo | null;
+  /** Repository settings and their analysis (§26.1); null until loaded. Kept current by `repo-settings:update`. */
+  repoSettings: RepoSettingsResponse | null;
+  /** Started applications (§26.4); kept current by `apps:status`. */
+  apps: AppProcess[];
 
   /** Info + graph list, once (a failed load is retried on the next call). */
   load(): Promise<void>;
@@ -65,6 +69,10 @@ export interface RepoCacheState {
   /** GET …/claude-auth (best effort: a failure keeps the last value). */
   loadClaudeAuth(refresh?: boolean): Promise<void>;
   setSummary(summary: RepoSummary): void;
+  /** GET …/settings (best effort) and GET …/apps. */
+  loadRepoSettings(): Promise<void>;
+  setRepoSettings(state: RepoSettingsResponse): void;
+  setApps(apps: AppProcess[]): void;
 }
 
 export type RepoCache = StoreApi<RepoCacheState>;
@@ -82,6 +90,8 @@ export function createRepoCache(repoId: string, api: RepoApi = repoApi(repoId)):
     pendingRuns: {},
     summary: null,
     claudeAuth: null,
+    repoSettings: null,
+    apps: [],
 
     load() {
       if (get().info && get().graphs) return Promise.resolve();
@@ -152,6 +162,20 @@ export function createRepoCache(repoId: string, api: RepoApi = repoApi(repoId)):
 
     setSummary(summary) {
       set({ summary });
+    },
+
+    async loadRepoSettings() {
+      const [settings, apps] = await Promise.allSettled([api.repoSettings(), api.apps()]);
+      if (settings.status === "fulfilled") set({ repoSettings: settings.value });
+      if (apps.status === "fulfilled") set({ apps: apps.value.apps });
+    },
+
+    setRepoSettings(repoSettings) {
+      set({ repoSettings });
+    },
+
+    setApps(apps) {
+      set({ apps });
     },
   }));
 }

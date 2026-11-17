@@ -1,6 +1,8 @@
 import { LAYOUT_DY, type NodeType } from "@promptgraph/shared";
 import { useState } from "react";
 import { NODE_TYPE_META, PALETTE_ORDER } from "../../lib/node-meta";
+import { useRepoCache } from "../../store/repo-cache";
+import { openRepoSettings } from "../../store/repo-settings-dialog";
 import { cn } from "@/lib/utils";
 import { useEditor, useRun, useView } from "../../store/view/context";
 import { isReadOnly } from "../../store/view/editor-store";
@@ -83,6 +85,10 @@ export function Palette({ onAdded, onDragStart, onDragEnd }: { onAdded?(): void;
         : "Drag onto the canvas, or click to append.",
   );
   const hint = runMode ? "Viewing a run: switch to the editor to add nodes." : editorHint;
+  // Start app / Run tests need the repository settings (§26.3): unavailable until they name an app / a check.
+  const appCount = useRepoCache(view.repoId, (s) => s.repoSettings?.settings.apps.length ?? 0);
+  const checkCount = useRepoCache(view.repoId, (s) => s.repoSettings?.settings.checks.length ?? 0);
+  const notConfigured = (type: NodeType) => (type === "app" && appCount === 0) || (type === "test" && checkCount === 0);
 
   const addByClick = (type: NodeType) => {
     const g = view.editor.getState().graph;
@@ -102,6 +108,32 @@ export function Palette({ onAdded, onDragStart, onDragEnd }: { onAdded?(): void;
         const needsPhase2 = meta.phase2 && phase < 2;
         const notYet = !needsPhase2 && supported !== null && !supported.includes(type);
         const unsupported = needsPhase2 || notYet;
+        const unconfigured = notConfigured(type);
+        if (unconfigured) {
+          return (
+            <div key={type} className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left">
+              <span className={`flex size-7 shrink-0 items-center justify-center rounded-md text-sm opacity-40 ${meta.accent}`}>
+                <NodeTypeIcon type={type} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] font-medium text-foreground/50">{meta.title}</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  {type === "app" ? "No app configured. " : "No tests configured. "}
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:text-foreground"
+                    onClick={() => {
+                      onAdded?.();
+                      openRepoSettings(view.repoId);
+                    }}
+                  >
+                    Set up…
+                  </button>
+                </span>
+              </span>
+            </div>
+          );
+        }
         return (
           <Button
             key={type}

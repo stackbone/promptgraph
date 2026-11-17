@@ -16,6 +16,13 @@ export interface HeadlessOptions {
    * call loads the user's whole setup (hundreds of thousands of tokens with many MCP servers).
    */
   minimal?: { systemPrompt: string };
+  /**
+   * A call that explores the directory read-only (§26.2 repository analysis): `--tools <tools>` and
+   * `--allowedTools <tools>` (only these built-in tools, pre-approved), `--permission-mode dontAsk` (anything else is
+   * denied, never asked), `--strict-mcp-config` (no MCP servers) and `--no-session-persistence`. CLAUDE.md and the
+   * project's settings still load: they often say how the project starts and is tested.
+   */
+  readOnlyTools?: readonly string[];
   timeoutMs?: number; // default 120s
   signal?: AbortSignal;
   /** Base env (claudeBin + childEnv); defaults to process.env. */
@@ -35,6 +42,9 @@ export function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult> {
   if (opts.model) args.push("--model", opts.model);
   if (opts.minimal) {
     args.push("--tools", "", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", opts.minimal.systemPrompt);
+  } else if (opts.readOnlyTools) {
+    const tools = opts.readOnlyTools.join(",");
+    args.push("--tools", tools, "--allowedTools", tools, "--permission-mode", "dontAsk", "--strict-mcp-config", "--no-session-persistence");
   }
 
   return new Promise<HeadlessResult>((resolve, reject) => {

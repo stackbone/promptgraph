@@ -10,6 +10,7 @@ import { SaveIndicator } from "../components/header/RunControls";
 import { InspectorDock } from "../components/inspector/InspectorDock";
 import { RunReport, useAutoOpenReport } from "../components/report/RunReport";
 import { TerminalDrawer } from "../components/terminal/TerminalDrawer";
+import { AppButton } from "../components/toolbar/AppButton";
 import { CanvasToolbar } from "../components/toolbar/CanvasToolbar";
 import type { RepoRoute } from "../lib/router/routes";
 import { createGraph } from "../store/view/actions";
@@ -74,9 +75,8 @@ function DiffGate() {
 
 /**
  * Controls floating over the top corners of the canvas. Top left: the graph's linked Linear issues (§24.3). Top
- * right: the autosave indicator. Everything else sits in
- * the canvas toolbar at the bottom (CanvasToolbar). The rows themselves let pointer events through, so only their
- * contents cover the canvas.
+ * right: the autosave indicator and the Run app button (§26.4). Everything else sits in the canvas toolbar at the
+ * bottom (CanvasToolbar). The rows themselves let pointer events through, so only their contents cover the canvas.
  */
 export function CanvasOverlay() {
   const issues = useEditor((s) => s.graph?.issues);
@@ -89,6 +89,7 @@ export function CanvasOverlay() {
       ) : null}
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-2 *:pointer-events-auto">
         <SaveIndicator />
+        <AppButton />
       </div>
     </>
   );

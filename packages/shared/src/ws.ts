@@ -11,6 +11,7 @@ import {
 } from "./chat.js";
 import { UsageLimitsSchema } from "./billing.js";
 import { RepoIdSchema, RepoSummarySchema } from "./repos.js";
+import { AppProcessSchema, RepoSettingsResponseSchema } from "./repo-settings.js";
 import { LaneSchema, NodeRunSchema, RunBriefEntrySchema, RunSummarySchema } from "./run.js";
 import {
   VoiceCancelMessageSchema,
@@ -28,7 +29,8 @@ import {
  *
  * Delivery rules:
  * - `repo:status`, `repo:removed` and `usage:limits` go to every client.
- * - `run:update`, `run:deleted`, `graphs:changed` and `chat:*` (§21) go to clients subscribed to their repository (`repo:subscribe`).
+ * - `run:update`, `run:deleted`, `graphs:changed`, `repo-settings:update`, `apps:status` and `chat:*` (§21) go to clients
+ *   subscribed to their repository (`repo:subscribe`).
  * - `node:update` / `lane:update` / `brief:update` go to clients subscribed to that run.
  * - `pty:*` go to clients attached to that pty.
  * - `voice:*` go only to the client that sent the voice:start.
@@ -62,6 +64,10 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pty:error"), ptyId: z.string(), message: z.string() }),
   /** A graph file was saved, created or deleted (by this app or detected on disk). */
   z.object({ type: z.literal("graphs:changed"), repoId: RepoIdSchema, graphId: z.string() }),
+  /** The repository settings or their analysis changed (§26.2). */
+  z.object({ type: z.literal("repo-settings:update"), repoId: RepoIdSchema, state: RepoSettingsResponseSchema }),
+  /** The repository's started applications changed (§26.4): every process, live or recently exited. */
+  z.object({ type: z.literal("apps:status"), repoId: RepoIdSchema, apps: z.array(AppProcessSchema) }),
   // Chat panel (§21)
   ChatItemMessageSchema,
   ChatDeltaMessageSchema,

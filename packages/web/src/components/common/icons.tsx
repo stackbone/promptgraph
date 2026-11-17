@@ -41,6 +41,19 @@ export const Icons = {
       <path d="M12 19h8" />
     </Svg>
   ),
+  app: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18" />
+      <path d="m10 13 4 2.5-4 2.5z" />
+    </Svg>
+  ),
+  test: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M9 3h6M10 3v6L5 18a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3" />
+      <path d="M7.5 14h9" />
+    </Svg>
+  ),
   commit: (p: IconProps) => (
     <Svg {...p}>
       <circle cx="12" cy="12" r="3" />

@@ -32,6 +32,23 @@ describe("runHeadless", () => {
     expect(argv.slice(argv.indexOf("--tools"))).toEqual(["--tools", "", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", "Be brief."]);
   });
 
+  it("explores read-only with readOnlyTools (§26.2 analysis)", async () => {
+    const { dir, env: e } = env();
+    const log = path.join(dir, "claude.log");
+    await runHeadless({ prompt: "msg", cwd: dir, readOnlyTools: ["Read", "Glob", "Grep"], env: { ...e, FAKE_CLAUDE_LOG: log } });
+    const argv = JSON.parse(fs.readFileSync(log, "utf8").trim().split("\n").at(-1)!).argv as string[];
+    expect(argv.slice(argv.indexOf("--tools"))).toEqual([
+      "--tools",
+      "Read,Glob,Grep",
+      "--allowedTools",
+      "Read,Glob,Grep",
+      "--permission-mode",
+      "dontAsk",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+    ]);
+  });
+
   it("throws on is_error, a missing binary, timeout and abort", async () => {
     const { dir, env: e } = env();
     await expect(runHeadless({ prompt: "x [[fail]]", cwd: dir, env: e })).rejects.toThrow(/error/);

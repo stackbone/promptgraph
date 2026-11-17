@@ -86,6 +86,10 @@ export class WsHub {
       ),
       bus.on("graphs:changed", ({ repoId, graphId }) => this.broadcast({ type: "graphs:changed", repoId, graphId }, (c) => c.repos.has(repoId))),
       bus.on("chat", ({ message }) => this.broadcast(message, (c) => c.repos.has(message.repoId))),
+      bus.on("repo-settings:update", ({ repoId, state }) =>
+        this.broadcast({ type: "repo-settings:update", repoId, state }, (c) => c.repos.has(repoId)),
+      ),
+      bus.on("apps:status", ({ repoId, apps }) => this.broadcast({ type: "apps:status", repoId, apps }, (c) => c.repos.has(repoId))),
       bus.on("repo:changed", ({ repoId }) => this.scheduleStatus(repoId)),
       bus.on("repo:removed", ({ repoId }) => {
         clearTimeout(this.statusTimers.get(repoId));

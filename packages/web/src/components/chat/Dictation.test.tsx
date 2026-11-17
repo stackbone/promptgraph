@@ -107,8 +107,10 @@ describe("composer dictation", () => {
     await waitFor(() => expect(recording()).toBe(true));
     expect(voiceSent).toHaveLength(1);
     expect(voiceSent[0]).toMatchObject({ type: "voice:start", voiceId: "v1", sampleRate: 16000 });
-    // Keyterms: promptgraph, node types and the labels of the open graph.
-    expect((voiceSent[0] as { keyterms: string[] }).keyterms).toEqual(expect.arrayContaining(["promptgraph", "commit", "Implement", "Test"]));
+    // Keyterms: promptgraph, node types and the labels of the open graph (deduplicated ignoring case: the label
+    // "Test" and the `test` node type are one term).
+    const keyterms = (voiceSent[0] as { keyterms: string[] }).keyterms.map((t) => t.toLowerCase());
+    expect(keyterms).toEqual(expect.arrayContaining(["promptgraph", "commit", "implement", "test"]));
     expect(screen.getByRole("button", { name: "Stop dictation" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByTestId("dictation-status").textContent).toMatch(/Listening/);
     await user.keyboard("[/Space]");

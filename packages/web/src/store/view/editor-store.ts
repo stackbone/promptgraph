@@ -40,6 +40,11 @@ export interface EditorValidation {
   phase: 1 | 2;
   /** null = all. */
   supportedNodeTypes: readonly NodeType[] | null;
+  /**
+   * Ids of the repository settings' apps and checks (§26.1), so `app` / `test` nodes naming none are errors; null
+   * while the settings are not loaded (not checked).
+   */
+  repoCommands?: { apps: readonly string[]; checks: readonly string[] } | null;
 }
 
 /**
@@ -91,6 +96,8 @@ export interface EditorStore extends EditorState, EditorValidation {
   future: Graph[];
 
   setPhase(phase: 1 | 2, supportedNodeTypes?: readonly NodeType[] | null): void;
+  /** The repository settings' commands changed (§26.1): revalidates. */
+  setRepoCommands(repoCommands: { apps: readonly string[]; checks: readonly string[] } | null): void;
   /** (Re)loads the graph file. */
   load(): Promise<void>;
   /**
@@ -211,7 +218,11 @@ export function canRedo(s: HistoryView): boolean {
 function validate(graph: Graph | null, s: EditorValidation): ValidationResult {
   if (!graph) return EMPTY_VALIDATION;
   try {
-    const result = validateGraph(graph, { phase: s.phase, ...(s.supportedNodeTypes ? { supportedNodeTypes: s.supportedNodeTypes } : {}) });
+    const result = validateGraph(graph, {
+      phase: s.phase,
+      ...(s.supportedNodeTypes ? { supportedNodeTypes: s.supportedNodeTypes } : {}),
+      ...(s.repoCommands ? { repoCommands: s.repoCommands } : {}),
+    });
     return { ...result, errors: result.errors.filter((e) => e.code !== "empty_graph") };
   } catch (err) {
     return { errors: [{ code: "invalid_config", message: `Validator crashed: ${errorMessage(err)}` }], warnings: [] };
@@ -387,6 +398,7 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       selectedEdgeId: null,
       phase: v.phase,
       supportedNodeTypes: v.supportedNodeTypes,
+      repoCommands: v.repoCommands ?? null,
       loading: graphId !== null,
       loadError: null,
       notFound: false,
@@ -406,7 +418,14 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       setPhase(phase, supportedNodeTypes = null) {
         const s = get();
         if (s.phase === phase && s.supportedNodeTypes === supportedNodeTypes) return;
-        set({ phase, supportedNodeTypes, validation: validate(s.graph, { phase, supportedNodeTypes }) });
+        set({ phase, supportedNodeTypes, validation: validate(s.graph, { phase, supportedNodeTypes, repoCommands: s.repoCommands }) });
+      },
+
+      setRepoCommands(repoCommands) {
+        const s = get();
+        const same = (a: readonly string[] | undefined, b: readonly string[] | undefined) => (a ?? []).join("\n") === (b ?? []).join("\n");
+        if (s.repoCommands === repoCommands || (s.repoCommands && repoCommands && same(s.repoCommands.apps, repoCommands.apps) && same(s.repoCommands.checks, repoCommands.checks))) return;
+        set({ repoCommands, validation: validate(s.graph, { ...s, repoCommands }) });
       },
 
       async load() {

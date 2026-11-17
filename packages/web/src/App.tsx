@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { SessionBanners, SignedOut } from "./components/common/SessionBanners";
 import { Toasts } from "./components/common/Toasts";
+import { RepoSettingsGate } from "./components/settings/RepoSettingsDialog";
 import { TabStrip, WindowTitleBar } from "./components/tabs/TabStrip";
 import { TabViews } from "./components/tabs/TabViews";
 import { getDesktopBridge, installExternalLinkHandler } from "./lib/desktop";
@@ -76,6 +77,7 @@ export function AppShell({ strip, children }: { strip?: ReactNode; children: Rea
       ) : (
         <FullScreenMessage title="Loading…" />
       )}
+      <RepoSettingsGate />
       <Toasts />
     </div>
   );

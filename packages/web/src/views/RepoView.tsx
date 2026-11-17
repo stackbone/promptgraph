@@ -42,6 +42,7 @@ export function RepoView({ route, active: activeProp }: { route: RepoRoute; acti
 
   useEffect(() => {
     void cache.getState().load();
+    void cache.getState().loadRepoSettings();
   }, [cache]);
 
   useEffect(() => {
@@ -132,6 +133,11 @@ function RouteViews({ route, own, active }: { route: RepoRoute; own: OwnStores; 
   useEffect(() => {
     if (setGraph && graphId) setGraph(graphKey(repoId, graphId));
   }, [setGraph, repoId, graphId]);
+  // `app` / `test` nodes are validated against the repository settings (§26.3).
+  const repoCommands = useRepoCache(repoId, (s) => s.repoSettings?.settings);
+  useEffect(() => {
+    editor.getState().setRepoCommands(repoCommands ? { apps: repoCommands.apps.map((a) => a.id), checks: repoCommands.checks.map((c) => c.id) } : null);
+  }, [editor, repoCommands]);
   const stores: ViewStores = useMemo(() => ({ repoId, ...own, editor, active }), [repoId, own, editor, active]);
   const view: View = useMemo(() => ({ ...stores, navigate: location.navigate, openInNewTab: location.openInNewTab }), [stores, location.navigate, location.openInNewTab]);
 

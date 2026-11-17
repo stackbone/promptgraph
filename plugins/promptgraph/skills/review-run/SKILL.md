@@ -30,6 +30,9 @@ Suggest only what the run data supports:
 - If a step waited at permission prompts, add narrow `allowedTools` to that step.
 - If tests failed and the run stopped, add a test-fix loop (`condition` exitCode plus a loop edge with
   `maxIterations`).
+- If a prompt was asked to run the tests or other checks itself ("then run the tests"), move that check into a
+  `test` node after the step (when `get_repo_settings` lists checks; else a `shell` node), so the run can see the
+  result and loop on it.
 - If the merge had conflicts, the parallel branches touched the same files: split the work by file,
   or run those steps one after another.
 - If an auto-completed step ended while Claude was still asking a question, use

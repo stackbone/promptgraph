@@ -13,7 +13,6 @@ import {
   type SaveGraphResponse,
   type ValidateGraphResponse,
 } from "@promptgraph/shared";
-import { SUPPORTED_PHASE } from "../../config/version.js";
 import type { DaemonContext } from "../../daemon/context.js";
 import { HttpError, readBody } from "../errors.js";
 import { REPO_PREFIX, repoOf, type App } from "../repo-scope.js";
@@ -100,7 +99,7 @@ export function registerGraphRoutes(app: App, daemon: DaemonContext): void {
     const { graphs, engine } = repoOf(c);
     const body = await readBody(c, ValidateGraphRequestSchema);
     const graph = body.graph ?? graphs.get(c.req.param("id")).graph;
-    return c.json<ValidateGraphResponse>(validateGraph(graph, { phase: SUPPORTED_PHASE, supportedNodeTypes: engine.supportedNodeTypes() }));
+    return c.json<ValidateGraphResponse>(validateGraph(graph, engine.validationOptions()));
   });
 
   app.post(`${P}/graphs/:id/runs`, async (c) => c.json(await repoOf(c).engine.startRun(c.req.param("id"))));

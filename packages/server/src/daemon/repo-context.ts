@@ -1,5 +1,8 @@
+import { isFinalRunStatus } from "@promptgraph/shared";
+import { AppManager } from "../apps/app-manager.js";
 import { ChatManager } from "../chat/chat-manager.js";
 import { createLinkedIssuesResolver } from "../chat/issues.js";
+import { RepoSettingsService } from "../repo-settings/settings-service.js";
 import { resolveChatMcp } from "../chat/launch.js";
 import { SUPPORTED_PHASE } from "../config/version.js";
 import { RunBriefer } from "../engine/brief.js";
@@ -25,8 +28,12 @@ export interface RepoContext {
   engine: Engine;
   /** Chat panel sessions of this repository (§21); processes run in its main checkout. */
   chat: ChatManager;
-  /** This repository's PTYs (node, setup-, shell-, reopen-). */
+  /** This repository's PTYs (node, setup-, shell-, reopen-, app-). */
   ptys: OwnedPtys;
+  /** `.promptgraph/repo-settings.json` and its analysis (§26.1, §26.2). */
+  settings: RepoSettingsService;
+  /** Applications started by the Run app button and by `app` nodes (§26.4). */
+  apps: AppManager;
   /** Set when the graph watcher could not start or stopped; the repository keeps working without live reloads. */
   readonly watchError: string | null;
   /**
@@ -51,7 +58,9 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
   const repo: RepoRef = { id: row.id, path: row.path, name: row.name };
   const graphs = new GraphStore(repo.path, bus, repo.id);
   const ptys = daemon.ptys.owned(repo.id);
-  const lanes = new LaneManager({ store, bus, paths, repo });
+  // Created before the lanes: removing a worktree first stops the apps running in it (§26.7).
+  let appsRef: AppManager | null = null;
+  const lanes = new LaneManager({ store, bus, paths, repo, beforeRemove: async (lane) => appsRef?.stopIn(lane.worktreePath) });
   // The port is read when a node starts, i.e. once the daemon listens.
   const claude = new ClaudeRunner({
     ptys,
@@ -62,7 +71,25 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     env,
     bypassPermissions: () => daemon.settings.get().bypassPermissions,
   });
-  const runners = createRunnerRegistry({ claude, ptys, lanes, paths, env, linear: daemon.linear });
+  const settings = new RepoSettingsService({
+    repoPath: repo.path,
+    env,
+    onChange: (state) => bus.emit("repo-settings:update", { repoId: repo.id, state }),
+  });
+  const apps = new AppManager({
+    repoId: repo.id,
+    repoPath: repo.path,
+    ptys,
+    paths,
+    env,
+    onChange: (list) => bus.emit("apps:status", { repoId: repo.id, apps: list }),
+  });
+  appsRef = apps;
+  // The processes an `app` node started live until its run ends (§26.3); a paused run keeps them.
+  const offRunEnd = bus.on("run:update", ({ repoId, run }) => {
+    if (repoId === repo.id && isFinalRunStatus(run.status)) void apps.stopRun(run.id);
+  });
+  const runners = createRunnerRegistry({ claude, ptys, lanes, paths, env, linear: daemon.linear, apps, repoSettings: () => settings.settings() });
   const engine = new Engine({
     store,
     graphs,
@@ -77,6 +104,11 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     env,
     billingMode: async () => (await daemon.claudeAuth.get(repo.path)).billingMode,
     brief: new RunBriefer({ store, bus, repo, env }),
+    repoCommands: () => settings.commandIds(),
+    laneSetup: () => {
+      const s = settings.settings();
+      return { copyFiles: s.copyFiles, setup: s.setup };
+    },
   });
   const offUserInput = daemon.ptys.onUserInput((ptyId) => engine.handleUserInput(ptyId));
   const chat = new ChatManager({
@@ -124,6 +156,8 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     engine,
     chat,
     ptys,
+    settings,
+    apps,
     get watchError() {
       return watchError;
     },
@@ -142,9 +176,11 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     dispose() {
       return (disposed ??= (async () => {
         offUserInput();
+        offRunEnd();
         watch?.stop();
         watch = null;
-        await Promise.all([engine.shutdown(), chat.shutdown()]);
+        settings.dispose();
+        await Promise.all([engine.shutdown(), chat.shutdown(), apps.dispose()]);
         await engine.drain();
       })());
     },

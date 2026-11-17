@@ -167,6 +167,12 @@ export function createDispatcher(): Dispatcher {
           .catch(() => undefined);
         void findEditorStore(msg.repoId, msg.graphId)?.getState().checkExternalChange();
         return;
+      case "repo-settings:update":
+        peekRepoCache(msg.repoId)?.getState().setRepoSettings(msg.state);
+        return;
+      case "apps:status":
+        peekRepoCache(msg.repoId)?.getState().setApps(msg.apps);
+        return;
       case "chat:item":
       case "chat:delta":
       case "chat:status":

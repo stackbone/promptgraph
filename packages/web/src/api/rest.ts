@@ -1,5 +1,9 @@
 import {
+  type AppsStatusResponse,
   type ClaudeAuthInfo,
+  type RepoSettings,
+  type RepoSettingsResponse,
+  type RunChecksResponse,
   type ClaudeCheckResponse,
   type ClaudeSetupResponse,
   type ChatSessionSummary,
@@ -323,6 +327,34 @@ export function repoApi(repoId: string) {
     /** HEAD, status and the signature the Git graph polls to know when to re-read the log (§13.7). */
     gitState(): Promise<GitStateResponse> {
       return request("GET", p.gitState);
+    },
+    /** The repository settings and their analysis (§26.1). */
+    repoSettings(): Promise<RepoSettingsResponse> {
+      return request("GET", p.settings);
+    },
+    /** 409 settings_conflict when the file changed since `baseHash` was read (null: it did not exist). */
+    saveRepoSettings(settings: RepoSettings, baseHash: string | null): Promise<RepoSettingsResponse> {
+      return request("PUT", p.settings, { settings, baseHash });
+    },
+    /** Starts the analysis with Claude (Haiku, §26.2); 409 analysis_running. */
+    analyzeRepo(): Promise<RepoSettingsResponse> {
+      return request("POST", p.analyze, {});
+    },
+    /** Started applications (§26.4). */
+    apps(): Promise<AppsStatusResponse> {
+      return request("GET", p.apps);
+    },
+    /** Starts one app or every configured app in the main checkout, or in a step's worktree (`nodeRunId`, §26.7). */
+    startApps(opts: { appId?: string; nodeRunId?: string } = {}): Promise<AppsStatusResponse> {
+      return request("POST", p.startApps, opts);
+    },
+    /** Runs the checks once by hand, in the main checkout or a step's worktree (§26.7); 409 no_checks / no_worktree. */
+    runChecks(opts: { checks?: string[]; nodeRunId?: string } = {}): Promise<RunChecksResponse> {
+      return request("POST", p.runChecks, opts);
+    },
+    /** Stops one process, or every app the button started. */
+    stopApps(ptyId?: string): Promise<AppsStatusResponse> {
+      return request("POST", p.stopApps, ptyId ? { ptyId } : {});
     },
   };
 }

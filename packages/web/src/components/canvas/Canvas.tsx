@@ -1,4 +1,4 @@
-import { NODE_TYPES, webRoutes, type Graph, type NodeType, type Position, type SourcePort } from "@promptgraph/shared";
+import { NODE_TYPES, nodeDisplayLabel, webRoutes, type Graph, type NodeType, type Position, type SourcePort } from "@promptgraph/shared";
 import {
   Background,
   BackgroundVariant,
@@ -16,7 +16,7 @@ import {
   type IsValidConnection,
   type NodeChange,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { toFlowEdges, toFlowNodes } from "../../lib/flow-mapping";
 import { connectionError } from "../../lib/graph-ops";
 import { editorNodeHex, statusHex } from "../../lib/status-hex";
@@ -30,6 +30,7 @@ import { Icons } from "../common/icons";
 import { useUndoRedoShortcuts } from "../header/RunControls";
 import { nodeTypes } from "../nodes/NodeCard";
 import type { PgFlowNode } from "../nodes/types";
+import { NodeWorktreeMenu, type NodeMenuTarget } from "./NodeWorktreeMenu";
 import { edgeTypes, type PgFlowEdge } from "./PgEdge";
 
 export const PALETTE_MIME = "application/x-promptgraph-node";
@@ -242,6 +243,18 @@ function RunCanvas() {
     },
     [view],
   );
+  // Right-click on a step that ran: tests and apps in its worktree (§26.7).
+  const [menu, setMenu] = useState<NodeMenuTarget | null>(null);
+  const onNodeContextMenu = useCallback(
+    (e: ReactMouseEvent, n: PgFlowNode) => {
+      const nodeRun = view.run.getState().currentByNode[n.id];
+      if (!nodeRun?.laneId) return;
+      e.preventDefault();
+      const node = graph?.nodes.find((g) => g.id === n.id);
+      setMenu({ x: e.clientX, y: e.clientY, nodeRun, label: node ? nodeDisplayLabel(node) : n.id });
+    },
+    [view, graph],
+  );
   const onPaneClick = useCallback(() => {
     const runs = view.run.getState();
     runs.selectNode(null);
@@ -252,40 +265,44 @@ function RunCanvas() {
   if (!graph) return <CenteredMessage>Loading run…</CenteredMessage>;
 
   return (
-    <ReactFlow<PgFlowNode, PgFlowEdge>
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      edgeTypes={edgeTypes}
-      colorMode="dark"
-      onNodesChange={applyMeasured}
-      onNodeClick={onNodeClick}
-      onPaneClick={onPaneClick}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      edgesFocusable={false}
-      deleteKeyCode={null}
-      multiSelectionKeyCode={active ? undefined : null}
-      selectionKeyCode={active ? undefined : null}
-      onMoveStart={onMoveStart}
-      onMoveEnd={onMoveEnd}
-      minZoom={0.2}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="var(--pg-canvas-dots)" />
-      <CanvasControls manual={manual} />
-      <AutoFit manual={manual} fitOnInit />
-      <WideEnoughForMinimap>
-        <MiniMap<PgFlowNode>
-          style={MINIMAP_STYLE}
-          pannable
-          zoomable
-          nodeColor={(n) => statusHex(n.data.nodeRun?.status ?? "pending", theme)}
-          nodeStrokeWidth={0}
-          maskColor="var(--pg-minimap-mask)"
-        />
-      </WideEnoughForMinimap>
-    </ReactFlow>
+    <>
+      {menu && <NodeWorktreeMenu key={`${menu.nodeRun.id}:${menu.x}:${menu.y}`} target={menu} onClose={() => setMenu(null)} />}
+      <ReactFlow<PgFlowNode, PgFlowEdge>
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        colorMode="dark"
+        onNodesChange={applyMeasured}
+        onNodeClick={onNodeClick}
+        onNodeContextMenu={onNodeContextMenu}
+        onPaneClick={onPaneClick}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        edgesFocusable={false}
+        deleteKeyCode={null}
+        multiSelectionKeyCode={active ? undefined : null}
+        selectionKeyCode={active ? undefined : null}
+        onMoveStart={onMoveStart}
+        onMoveEnd={onMoveEnd}
+        minZoom={0.2}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="var(--pg-canvas-dots)" />
+        <CanvasControls manual={manual} />
+        <AutoFit manual={manual} fitOnInit />
+        <WideEnoughForMinimap>
+          <MiniMap<PgFlowNode>
+            style={MINIMAP_STYLE}
+            pannable
+            zoomable
+            nodeColor={(n) => statusHex(n.data.nodeRun?.status ?? "pending", theme)}
+            nodeStrokeWidth={0}
+            maskColor="var(--pg-minimap-mask)"
+          />
+        </WideEnoughForMinimap>
+      </ReactFlow>
+    </>
   );
 }
 
