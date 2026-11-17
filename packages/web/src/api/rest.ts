@@ -157,6 +157,10 @@ export const daemonApi = {
   usageLimits(): Promise<UsageLimitsResponse> {
     return request("GET", API.usageLimits);
   },
+  /** Asks Claude Code for the current usage limits first (no tokens; the daemon spaces the checks). */
+  refreshUsageLimits(): Promise<UsageLimitsResponse> {
+    return request("POST", API.refreshUsageLimits);
+  },
   /** Linear connection (§24). The key is write-only: no response contains it. */
   linearStatus(): Promise<LinearStatusResponse> {
     return request("GET", API.linear);

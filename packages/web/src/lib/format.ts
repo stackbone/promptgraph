@@ -10,6 +10,16 @@ export function formatDuration(ms: number): string {
   return `${h}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
+/** Time until something, coarse: "1d 4h", "3h 12m", "45m", "<1m". */
+export function formatTimeLeft(ms: number): string {
+  const m = Math.floor(Math.max(0, ms) / 60_000);
+  if (m < 1) return "<1m";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
 /** Elapsed time of something that started at `start` and finished at `end` (or is still going at `now`). */
 export function elapsed(start: number | null, end: number | null, now: number): string | null {
   if (start === null) return null;

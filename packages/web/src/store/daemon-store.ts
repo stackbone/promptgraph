@@ -30,12 +30,16 @@ export interface DaemonState {
   removed: Record<string, RemovedRepo>;
   /** Last observed subscription usage limits (§23.3), live from `usage:limits`; null when none was seen. */
   usageLimits: UsageLimits | null;
+  /** A refreshUsageLimits is in flight. */
+  usageLimitsChecking: boolean;
 
   loadInfo(): Promise<void>;
   loadRepos(): Promise<void>;
   loadSettings(): Promise<void>;
   /** GET /api/daemon/usage-limits (best effort). */
   loadUsageLimits(): Promise<void>;
+  /** POST /api/daemon/usage-limits/refresh: the daemon asks Claude Code first (best effort). */
+  refreshUsageLimits(): Promise<void>;
   /** `usage:limits`. */
   applyUsageLimits(limits: UsageLimits): void;
   updateSettings(patch: Partial<AppSettings>): Promise<void>;
@@ -64,6 +68,7 @@ export const useDaemonStore = create<DaemonState>()((set, get) => ({
   versionMismatch: false,
   removed: {},
   usageLimits: null,
+  usageLimitsChecking: false,
 
   async loadInfo() {
     try {
@@ -80,6 +85,19 @@ export const useDaemonStore = create<DaemonState>()((set, get) => ({
       if (limits && (get().usageLimits?.observedAt ?? 0) <= limits.observedAt) set({ usageLimits: limits });
     } catch {
       // Best effort: shown when the next observation arrives.
+    }
+  },
+
+  async refreshUsageLimits() {
+    if (get().usageLimitsChecking) return;
+    set({ usageLimitsChecking: true });
+    try {
+      const { limits } = await daemonApi.refreshUsageLimits();
+      if (limits && (get().usageLimits?.observedAt ?? 0) <= limits.observedAt) set({ usageLimits: limits });
+    } catch {
+      // Best effort: the last observation stays.
+    } finally {
+      set({ usageLimitsChecking: false });
     }
   },
 

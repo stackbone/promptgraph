@@ -1,8 +1,8 @@
-import { billingModeLabel, usageWindowsOf, type ClaudeAuthInfo, type UsageLimits } from "@promptgraph/shared";
+import { billingModeLabel, usageWindowShortLabel, usageWindowsOf, type ClaudeAuthInfo, type UsageLimits } from "@promptgraph/shared";
 import { AlertTriangleIcon, CloudIcon, CreditCardIcon, GaugeIcon, KeyRoundIcon, RefreshCwIcon, UserXIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "cn";
-import { formatDateTime, formatDuration } from "../../lib/format";
+import { formatDateTime, formatDuration, formatTimeLeft } from "../../lib/format";
 import { useNow } from "../../lib/use-now";
 import { useDaemonStore } from "../../store/daemon-store";
 import { getRepoCache, useRepoCache } from "../../store/repo-cache";
@@ -12,15 +12,23 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 /** A window above this fraction is shown as a warning. */
 const WARN_UTILIZATION = 0.8;
+/** Limits older than this are checked again when the badge mounts. */
+const STALE_LIMITS_MS = 5 * 60_000;
+/** The badge's ticker shows the next usage window after this long. */
+export const TICKER_ROTATE_MS = 20_000;
+/** Segments of the ticker's bar. */
+const TICKER_SEGMENTS = 10;
 
 /**
  * Header badge (DESIGN §23.4): how Claude is billed in this repository (subscription plan, API key, cloud) and, on a
- * subscription, the last observed usage limits. Opening it re-checks `claude auth status`.
+ * subscription, the last observed usage limits. Mounting it checks the limits when they are missing or stale; opening it
+ * re-checks `claude auth status` and the limits (the daemon spaces the checks).
  */
 export function BillingBadge() {
   const { repoId } = useView();
   const auth = useRepoCache(repoId, (s) => s.claudeAuth);
   const limits = useDaemonStore((s) => s.usageLimits);
+  const subscription = auth?.billingMode === "subscription";
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -29,9 +37,16 @@ export function BillingBadge() {
     void useDaemonStore.getState().loadUsageLimits();
   }, [repoId]);
 
+  useEffect(() => {
+    if (!subscription) return;
+    const { usageLimits } = useDaemonStore.getState();
+    if (!usageLimits || Date.now() - usageLimits.observedAt > STALE_LIMITS_MS) void useDaemonStore.getState().refreshUsageLimits();
+  }, [subscription]);
+
   const refresh = async () => {
     setRefreshing(true);
-    await getRepoCache(repoId).getState().loadClaudeAuth(true);
+    const usage = subscription ? useDaemonStore.getState().refreshUsageLimits() : Promise.resolve();
+    await Promise.all([getRepoCache(repoId).getState().loadClaudeAuth(true), usage]);
     setRefreshing(false);
   };
 
@@ -55,6 +70,7 @@ export function BillingBadge() {
         >
           {warn ? <AlertTriangleIcon /> : <ModeIcon auth={auth} />}
           <span className="hidden lg:inline">{label}</span>
+          {auth.billingMode === "subscription" && <UsageTicker limits={limits} />}
         </Button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="w-80 space-y-3 text-sm">
@@ -79,6 +95,39 @@ export function BillingBadge() {
         {auth.billingMode === "subscription" && <UsageLimitsView limits={limits} />}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * One usage window at a time, next to the plan: `week ━━━━━━──── 59% · 1d 4h` (name, bar, utilization, time to
+ * reset). Rotates through the windows every TICKER_ROTATE_MS; the full list is in the popover.
+ */
+export function UsageTicker({ limits }: { limits: UsageLimits | null }) {
+  const now = useNow(limits !== null);
+  const windows = limits ? usageWindowsOf(limits, now) : [];
+  const [index, setIndex] = useState(0);
+  const count = windows.length;
+  useEffect(() => {
+    if (count < 2) return;
+    const timer = setInterval(() => setIndex((i) => i + 1), TICKER_ROTATE_MS);
+    return () => clearInterval(timer);
+  }, [count]);
+  if (count === 0) return null;
+  const { name, window } = windows[index % count]!;
+  const pct = Math.min(100, Math.round(window.utilization * 100));
+  const filled = Math.min(TICKER_SEGMENTS, Math.round(window.utilization * TICKER_SEGMENTS));
+  const high = window.utilization >= WARN_UTILIZATION || window.status === "rejected";
+  return (
+    <span data-testid="usage-ticker" aria-hidden className="hidden items-center gap-1.5 font-mono text-[11px] md:inline-flex">
+      <span>{usageWindowShortLabel(name)}</span>
+      <span className="tracking-[-0.15em]">
+        <span className={high ? "text-amber-600" : "text-primary"}>{"━".repeat(filled)}</span>
+        <span className="text-muted-foreground/40">{"─".repeat(TICKER_SEGMENTS - filled)}</span>
+      </span>
+      <span>
+        {pct}%{window.resetsAt !== null && ` · ${formatTimeLeft(window.resetsAt - now)}`}
+      </span>
+    </span>
   );
 }
 
@@ -122,9 +171,10 @@ function needsAttention(auth: ClaudeAuthInfo, limits: UsageLimits | null): boole
 /** The last observed usage windows; observations, so their age is shown. */
 export function UsageLimitsView({ limits }: { limits: UsageLimits | null }) {
   const now = useNow(limits !== null);
+  const checking = useDaemonStore((s) => s.usageLimitsChecking);
   const windows = limits ? usageWindowsOf(limits, now) : [];
   if (!limits || windows.length === 0) {
-    return <p className="text-xs text-muted-foreground">Usage limits appear after the chat's first reply.</p>;
+    return <p className="text-xs text-muted-foreground">{checking ? "Checking usage limits…" : "No usage limits reported yet."}</p>;
   }
   return (
     <div className="space-y-2">
@@ -153,7 +203,7 @@ export function UsageLimitsView({ limits }: { limits: UsageLimits | null }) {
         );
       })}
       {limits.overage?.inUse && <p className="text-xs text-amber-700">Using extra usage beyond your plan.</p>}
-      <p className="text-[11px] text-muted-foreground">Last reported {formatDuration(Math.max(0, now - limits.observedAt))} ago, by the chat.</p>
+      <p className="text-[11px] text-muted-foreground">Last checked {formatDuration(Math.max(0, now - limits.observedAt))} ago.</p>
     </div>
   );
 }
