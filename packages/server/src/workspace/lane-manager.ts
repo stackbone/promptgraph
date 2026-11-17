@@ -287,7 +287,8 @@ export class LaneManager {
       this.setStatus(lane, "removed");
     }
     await this.withLaneLock(REPO_LOCK, () => git(repo.path, ["worktree", "prune"], { readOnly: true }));
-    fs.rmSync(path.join(paths.worktreesDir, repo.name, runId), { recursive: true, force: true });
+    // The legacy root too: a run whose worktrees could not be migrated (§11.4) still lives there.
+    for (const root of [paths.worktreesDir, paths.legacyWorktreesDir]) fs.rmSync(path.join(root, repo.name, runId), { recursive: true, force: true });
     store.updateRun(runId, { cleanedUp: true });
   }
 

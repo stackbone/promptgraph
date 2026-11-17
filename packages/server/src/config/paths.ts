@@ -14,6 +14,19 @@ export function pgHome(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(os.homedir(), ".promptgraph");
 }
 
+/**
+ * Root of the lane worktrees (DESIGN §9.1, §11): outside PG_HOME, so the `permissions.deny` rule for PG_HOME
+ * (§7.6) never covers a node's own working directory, and outside every repository. `PG_WORKTREES_DIR` overrides
+ * it. Without it: `$XDG_DATA_HOME/promptgraph/worktrees` (default `~/.local/share/…`) for the real PG_HOME, and
+ * `<PG_HOME>-worktrees` next to an explicit PG_HOME (tests, manual runs), so those never write to the user's home.
+ */
+export function pgWorktreesDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.PG_WORKTREES_DIR) return path.resolve(env.PG_WORKTREES_DIR);
+  if (env.PG_HOME) return `${pgHome(env)}-worktrees`;
+  const xdg = env.XDG_DATA_HOME && path.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : path.join(os.homedir(), ".local", "share");
+  return path.join(xdg, "promptgraph", "worktrees");
+}
+
 export interface PgPaths {
   home: string;
   /** SQLite database (§11.2). */
@@ -22,14 +35,18 @@ export interface PgPaths {
   settingsFile: string;
   /** Per-run dirs: hooks.json + terminal logs. */
   runsDir: string;
-  /** Worktrees root: <worktreesDir>/<repo-name>/<run-id>/<lane-id> (§9.1). */
+  /** Worktrees root: <worktreesDir>/<repo-name>/<run-id>/<lane-id> (§9.1); see pgWorktreesDir. */
   worktreesDir: string;
+  /** Where worktrees lived before 2026-11 (`<home>/worktrees`); migrated at daemon start (§11.4). */
+  legacyWorktreesDir: string;
   /** Installed helper scripts (pg-hook). */
   binDir: string;
   /** Short-lived private files (voice dictation WAVs, §22.5). */
   tmpDir: string;
   /** Whisper models the user drops in (voice dictation auto-detection, §22.3). */
   modelsDir: string;
+  /** Pasted images, content-addressed (§25). */
+  imagesDir: string;
 }
 
 export function getPaths(env: NodeJS.ProcessEnv = process.env): PgPaths {
@@ -39,10 +56,12 @@ export function getPaths(env: NodeJS.ProcessEnv = process.env): PgPaths {
     stateDb: path.join(home, "state.db"),
     settingsFile: path.join(home, "settings.json"),
     runsDir: path.join(home, "runs"),
-    worktreesDir: path.join(home, "worktrees"),
+    worktreesDir: pgWorktreesDir(env),
+    legacyWorktreesDir: path.join(home, "worktrees"),
     binDir: path.join(home, "bin"),
     tmpDir: path.join(home, "tmp"),
     modelsDir: path.join(home, "models"),
+    imagesDir: path.join(home, "images"),
   };
 }
 
@@ -55,23 +74,35 @@ export function ptyLogPath(paths: PgPaths, runId: string, ptyId: string): string
   return path.join(runDir(paths, runId), `${ptyId}.log`);
 }
 
-/** hooks.json generated once per run (§7.2). */
-export function hooksSettingsPath(paths: PgPaths, runId: string): string {
-  return path.join(runDir(paths, runId), "hooks.json");
+/** hooks.json generated once per run (§7.2); `hooks-bypass.json` for consoles started in bypassPermissions (§7.6). */
+export function hooksSettingsPath(paths: PgPaths, runId: string, opts: { bypass?: boolean } = {}): string {
+  return path.join(runDir(paths, runId), opts.bypass ? "hooks-bypass.json" : "hooks.json");
 }
 
 /**
- * Whether the realpath `p` is the worktrees root or inside it (DESIGN §4.2): a lane worktree is never a
- * repository of its own. Compares against the root as configured and its realpath (PG_HOME may be a link).
+ * Whether the realpath `p` is a worktrees root or inside one (DESIGN §4.2): a lane worktree is never a
+ * repository of its own. Checks the current root and the legacy one (a worktree that could not be migrated),
+ * each as configured and as its realpath (either may be a link).
  */
 export function isInWorktreesDir(paths: PgPaths, p: string): boolean {
-  const roots = new Set([path.resolve(paths.worktreesDir)]);
-  try {
-    roots.add(fs.realpathSync(paths.worktreesDir));
-  } catch {
-    // Not created yet: nothing can be inside it but the configured path.
+  const roots = new Set<string>();
+  for (const dir of [paths.worktreesDir, paths.legacyWorktreesDir]) {
+    roots.add(path.resolve(dir));
+    try {
+      roots.add(fs.realpathSync(dir));
+    } catch {
+      // Not created yet: nothing can be inside it but the configured path.
+    }
   }
   return [...roots].some((root) => p === root || p.startsWith(root + path.sep));
+}
+
+/**
+ * Where a Claude node run's pasted images are copied for Claude to read (§25): next to the run's lane worktrees
+ * (`<worktreesDir>/<repo>/<run>/.images/<nodeRun>`), so the run's cleanup removes them with the worktrees.
+ */
+export function nodeRunImagesDir(laneWorktreePath: string, nodeRunId: string): string {
+  return path.join(path.dirname(laneWorktreePath), ".images", nodeRunId);
 }
 
 export function worktreePath(paths: PgPaths, repoName: string, runId: string, laneId: string): string {

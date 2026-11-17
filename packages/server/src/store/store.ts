@@ -345,6 +345,15 @@ const NODE_RUN_COLUMNS: { [K in keyof NodeRunPatch]-?: [string, (v: NodeRunPatch
  * Synchronous DAO over better-sqlite3. Pure persistence: no events, no business rules.
  * JSON columns are (de)serialised here; rows are returned as shared DTOs.
  */
+/** `column` = `from`, or starting with `from` + "/", becomes the same path under `to` (no LIKE: paths may hold % or _). */
+function rewritePrefix(db: Database.Database, table: "lanes" | "node_runs", column: "worktree_path" | "transcript_path", from: string, to: string): number {
+  if (from === to) return 0;
+  const dir = `${from}/`;
+  return db
+    .prepare(`UPDATE ${table} SET ${column} = ? || substr(${column}, ?) WHERE ${column} = ? OR substr(${column}, 1, ?) = ?`)
+    .run(to, from.length + 1, from, dir.length, dir).changes;
+}
+
 export class Store {
   constructor(
     readonly db: Database.Database,
@@ -869,6 +878,19 @@ export class Store {
       this.db.prepare(`UPDATE chat_sessions SET repo_path = ? WHERE repo_path = ?`).run(to, from);
       return moved;
     });
+  }
+
+  /**
+   * Rewrites lane worktree paths equal to the directory `from` or inside it to the same path under `to` (the worktree
+   * migration, DESIGN §11.4). Returns the number of lanes changed.
+   */
+  rewriteWorktreePaths(from: string, to: string): number {
+    return rewritePrefix(this.db, "lanes", "worktree_path", from, to);
+  }
+
+  /** Rewrites node run transcript paths inside the directory `from` to `to` (a copied Claude project dir, §11.4). */
+  rewriteTranscriptDir(from: string, to: string): number {
+    return rewritePrefix(this.db, "node_runs", "transcript_path", from, to);
   }
 
   // meta ---------------------------------------------------------------------

@@ -421,7 +421,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Run a graph",
       description:
-        "Starts a run of a saved graph: Claude sessions, shell commands and git steps run in worktrees under ~/.promptgraph. " +
+        "Starts a run of a saved graph: Claude sessions, shell commands and git steps run in worktrees under ~/.local/share/promptgraph/worktrees. " +
         "Fails with the validation result when the graph has errors. Then use wait_for_run.",
       inputSchema: { ...repoArg, graphId: graphIdArg },
       annotations: WRITE,

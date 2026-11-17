@@ -6,7 +6,7 @@ description: Run a promptgraph graph and supervise it until it finishes. Handles
 # Run and supervise a promptgraph graph
 
 A run starts real Claude Code sessions, shell commands and git operations in worktrees under
-`~/.promptgraph/worktrees/`. It uses the user's Claude usage and can create branches and pull
+`~/.local/share/promptgraph/worktrees/`. It uses the user's Claude usage and can create branches and pull
 requests (only after a human approves). Start a run only when the user asked for one.
 
 The tools come from the `promptgraph` MCP server.
