@@ -60,7 +60,19 @@ export class UsageLimitsTracker {
   /** A `rate_limit_info` from a Claude process. Unusable observations are ignored. */
   observe(info: RateLimitInfo): void {
     const next = mergeUsageLimits(this.limits, info, this.now());
-    if (!next) return;
+    if (next) this.set(next);
+  }
+
+  /**
+   * Every window `/usage` lists (UsageProbe): they replace the previous ones, since a window it leaves out is not in use.
+   * The overage status, which `/usage` does not show, is kept.
+   */
+  observeSnapshot(windows: Record<string, UsageWindow>): void {
+    const rejected = Object.values(windows).some((w) => w.status === "rejected");
+    this.set({ status: rejected ? "rejected" : "allowed", windows, overage: this.limits?.overage ?? null, observedAt: this.now() });
+  }
+
+  private set(next: UsageLimits): void {
     this.limits = next;
     this.store.setMeta(META_KEY, JSON.stringify(next));
     this.bus.emit("usage:limits", { limits: next });

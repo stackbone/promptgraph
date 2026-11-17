@@ -354,6 +354,14 @@ describe("misc routes", () => {
     setup.ctx.usageLimits.observe({ status: "allowed", unifiedWindows: { seven_day: { utilization: 0.25 } } });
     const { limits } = (await (await app.request("/api/daemon/usage-limits", { headers: AUTH })).json()) as { limits: { windows: object } };
     expect(limits.windows).toEqual({ seven_day: { utilization: 0.25, resetsAt: null, status: null } });
+
+    // POST …/refresh asks Claude Code (`claude -p /usage`) first; GET never does (no side effects).
+    const refresh = vi.spyOn(setup.ctx.usageProbe, "refresh").mockImplementation(async () => {
+      setup.ctx.usageLimits.observeSnapshot({ five_hour: { utilization: 0.4, resetsAt: null, status: null } });
+    });
+    const refreshed = (await (await app.request("/api/daemon/usage-limits/refresh", { method: "POST", headers: JSON_AUTH })).json()) as { limits: { windows: object } };
+    expect(refreshed.limits.windows).toEqual({ five_hour: { utilization: 0.4, resetsAt: null, status: null } });
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("lists slash commands", async () => {

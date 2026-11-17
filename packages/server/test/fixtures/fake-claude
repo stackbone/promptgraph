@@ -55,6 +55,14 @@ if (process.argv[2] === "auth" && process.argv[3] === "status") {
   process.exit(0);
 }
 
+// `claude -p /usage` (DESIGN §23.3): answered locally by Claude Code, so not logged as a session either. The text is
+// FAKE_CLAUDE_USAGE_TEXT, by default one without usage windows.
+if (args.print && args.positional[0] === "/usage") {
+  const text = process.env.FAKE_CLAUDE_USAGE_TEXT ?? "You are currently using your subscription to power your Claude Code usage";
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 0, total_cost_usd: 0, result: text }) + "\n");
+  process.exit(0);
+}
+
 const cwd = process.cwd();
 const model = ALIASES[args.model] ?? args.model ?? DEFAULT_MODEL;
 const sessionId = args.resume ?? args["session-id"] ?? randomUUID();

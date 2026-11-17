@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { AppSettingsStore } from "../config/app-settings.js";
 import { ClaudeAuthProbe, type AuthStatusRunner } from "../config/claude-auth.js";
 import { LegacyRepoLocks } from "../config/instance-lock.js";
@@ -21,6 +22,7 @@ import { LinearClient, type LinearFetch } from "../linear/client.js";
 import { LinearService } from "../linear/service.js";
 import { Sessions } from "./sessions.js";
 import { UsageLimitsTracker } from "./usage-limits.js";
+import { UsageProbe, type UsageProbeRunner } from "./usage-probe.js";
 
 /**
  * Everything daemon-wide (DESIGN §4.1): one DB, bus, PTY manager, hook router and notifier shared by
@@ -62,6 +64,8 @@ export interface DaemonContext {
   claudeAuth: ClaudeAuthProbe;
   /** Last observed subscription usage limits (§23.3). */
   usageLimits: UsageLimitsTracker;
+  /** `claude -p /usage` on demand: at start, after a Claude node's turn and from the billing badge (§23.3). */
+  usageProbe: UsageProbe;
   /** Linear connection (§24): the saved API key and issue lookups. */
   linear: LinearService;
 }
@@ -75,6 +79,8 @@ export interface CreateDaemonContextOptions {
   chatSpawner?: ChatSpawner;
   /** `claude auth status` runner (tests); defaults to the claude CLI. */
   authStatusRunner?: AuthStatusRunner;
+  /** `claude -p /usage` runner (tests); defaults to the claude CLI. */
+  usageProbeRunner?: UsageProbeRunner;
   /** fetch used for Linear's API (tests); defaults to the global fetch. */
   linearFetch?: LinearFetch;
 }
@@ -105,6 +111,7 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
   const sessions = new Sessions(store, bus);
   sessions.deleteExpired();
   syncTokenFingerprint(store, sessions, opts.token);
+  const usageLimits = new UsageLimitsTracker(store, bus);
   let token = opts.token;
   let warnings: Promise<string[]> | null = opts.warnings ? Promise.resolve(opts.warnings) : null;
   const ctx: DaemonContext = {
@@ -121,7 +128,8 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
     startedAt: Date.now(),
     hookSecret: randomBytes(32).toString("base64url"),
     claudeAuth: new ClaudeAuthProbe(env, { run: opts.authStatusRunner }),
-    usageLimits: new UsageLimitsTracker(store, bus),
+    usageLimits,
+    usageProbe: new UsageProbe(env, usageLimits, { run: opts.usageProbeRunner, cwd: () => os.homedir() }),
     getToken: () => token,
     setToken: (t) => {
       token = t;

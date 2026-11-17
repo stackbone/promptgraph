@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isFinalNodeStatus } from "@promptgraph/shared";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createAdaptorServer } from "@hono/node-server";
@@ -104,6 +105,12 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Runnin
   const http = server;
   const stopNotifier = daemon.notifier.start();
   const stopSessionSweep = daemon.sessions.startSweep();
+  // Usage limits from the start, not only after the chat's first reply (§23.3); node terminals report none, so a
+  // Claude node's finished turn asks again (spaced by UsageProbe).
+  void daemon.usageProbe.refresh();
+  const stopUsageRefresh = daemon.bus.on("node:update", ({ nodeRun }) => {
+    if (nodeRun.sessionId && (nodeRun.status === "idle" || isFinalNodeStatus(nodeRun.status))) void daemon.usageProbe.refresh({ auto: true });
+  });
   const hub = new WsHub(daemon);
   hub.attach(http);
   writeStickyPort(paths, daemon.port);
@@ -128,6 +135,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Runnin
     daemon.legacyLocks.releaseAll();
     stopNotifier();
     stopSessionSweep();
+    stopUsageRefresh();
     await hub.close();
     await new Promise<void>((resolve) => {
       http.close(() => resolve());
